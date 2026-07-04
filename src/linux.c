@@ -13,6 +13,26 @@
 #include "../include/cpuinfo.h"
 #include "x86.h"
 
+#if defined(__aarch64__)
+// The AArch64 hardware capability bits reported through the auxiliary vector.
+// The values are a stable part of the kernel ABI; they are defined here rather
+// than relying on <asm/hwcap.h> so that the newer bits are available even when
+// building against older toolchain headers.
+#define CPUINFO_HWCAP_AES     (1ul << 3)
+#define CPUINFO_HWCAP_PMULL   (1ul << 4)
+#define CPUINFO_HWCAP_SHA1    (1ul << 5)
+#define CPUINFO_HWCAP_SHA2    (1ul << 6)
+#define CPUINFO_HWCAP_CRC32   (1ul << 7)
+#define CPUINFO_HWCAP_ATOMICS (1ul << 8)
+#define CPUINFO_HWCAP_ASIMDHP (1ul << 10)
+#define CPUINFO_HWCAP_SHA3    (1ul << 17)
+#define CPUINFO_HWCAP_ASIMDDP (1ul << 20)
+#define CPUINFO_HWCAP_SHA512  (1ul << 21)
+#define CPUINFO_HWCAP_SVE     (1ul << 22)
+
+#define CPUINFO_HWCAP2_SVE2 (1ul << 1)
+#endif
+
 struct cpuinfo_s {
   cpuinfo_cpu_t info;
 
@@ -124,12 +144,176 @@ cpuinfo__features(void) {
   return cpuinfo__cpuid_features();
 #elif defined(__aarch64__)
   // Advanced SIMD is mandatory on AArch64.
-  return cpuinfo_feature_neon;
+  uint64_t features = cpuinfo_feature_arm_neon;
+
+  unsigned long hwcap = getauxval(AT_HWCAP);
+  unsigned long hwcap2 = getauxval(AT_HWCAP2);
+
+  if (hwcap & CPUINFO_HWCAP_AES) features |= cpuinfo_feature_arm_aes;
+  if (hwcap & CPUINFO_HWCAP_PMULL) features |= cpuinfo_feature_arm_pmull;
+  if (hwcap & CPUINFO_HWCAP_SHA1) features |= cpuinfo_feature_arm_sha1;
+  if (hwcap & CPUINFO_HWCAP_SHA2) features |= cpuinfo_feature_arm_sha2;
+  if (hwcap & CPUINFO_HWCAP_SHA512) features |= cpuinfo_feature_arm_sha512;
+  if (hwcap & CPUINFO_HWCAP_SHA3) features |= cpuinfo_feature_arm_sha3;
+  if (hwcap & CPUINFO_HWCAP_CRC32) features |= cpuinfo_feature_arm_crc32;
+  if (hwcap & CPUINFO_HWCAP_ATOMICS) features |= cpuinfo_feature_arm_atomics;
+  if (hwcap & CPUINFO_HWCAP_ASIMDDP) features |= cpuinfo_feature_arm_dotprod;
+  if (hwcap & CPUINFO_HWCAP_ASIMDHP) features |= cpuinfo_feature_arm_fp16;
+  if (hwcap & CPUINFO_HWCAP_SVE) features |= cpuinfo_feature_arm_sve;
+  if (hwcap2 & CPUINFO_HWCAP2_SVE2) features |= cpuinfo_feature_arm_sve2;
+
+  return features;
 #elif defined(__arm__)
-  return (getauxval(AT_HWCAP) & (1 << 12)) ? cpuinfo_feature_neon : 0; // HWCAP_NEON
+  return (getauxval(AT_HWCAP) & (1 << 12)) ? cpuinfo_feature_arm_neon : 0; // HWCAP_NEON
 #else
   return 0;
 #endif
+}
+
+// Read a single unsigned integer from a sysfs file, returning `0` if the file
+// is absent or unreadable.
+static uint64_t
+cpuinfo__sysfs_uint(const char *path) {
+  char buf[64];
+
+  if (!cpuinfo__read_file(path, buf, sizeof(buf))) return 0;
+
+  return strtoull(buf, NULL, 10);
+}
+
+// Read a sysfs size value such as "32K" or "8M" and return it in bytes.
+static uint64_t
+cpuinfo__sysfs_size(const char *path) {
+  char buf[64];
+
+  if (!cpuinfo__read_file(path, buf, sizeof(buf))) return 0;
+
+  char *end;
+  uint64_t value = strtoull(buf, &end, 10);
+
+  switch (*end) {
+  case 'K':
+  case 'k':
+    return value * 1024;
+  case 'M':
+  case 'm':
+    return value * 1024 * 1024;
+  case 'G':
+  case 'g':
+    return value * 1024 * 1024 * 1024;
+  }
+
+  return value;
+}
+
+// Fill in the cache sizes and line size from the topology that the kernel
+// exposes for the first logical processor, which is representative of at least
+// one core type on a hybrid CPU.
+static void
+cpuinfo__cache(cpuinfo_cpu_t *cpu) {
+  char path[128];
+
+  for (unsigned i = 0;; i++) {
+    char level_buf[16];
+
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/level", i);
+
+    // The cache index directories are contiguous, so a missing level marks the
+    // end of the enumeration.
+    if (!cpuinfo__read_file(path, level_buf, sizeof(level_buf))) break;
+
+    unsigned level = (unsigned) strtoul(level_buf, NULL, 10);
+
+    char type[16] = {0};
+
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/type", i);
+    cpuinfo__read_file(path, type, sizeof(type));
+
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/size", i);
+    uint64_t size = cpuinfo__sysfs_size(path);
+
+    if (cpu->cache_line == 0) {
+      snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/coherency_line_size", i);
+      cpu->cache_line = (uint32_t) cpuinfo__sysfs_uint(path);
+    }
+
+    switch (level) {
+    case 1:
+      // A unified level 1 cache, if present, backs both roles.
+      if (type[0] != 'I') cpu->l1d_cache = size;
+      if (type[0] != 'D') cpu->l1i_cache = size;
+      break;
+    case 2:
+      cpu->l2_cache = size;
+      break;
+    case 3:
+      cpu->l3_cache = size;
+      break;
+    }
+  }
+}
+
+// Classify physical cores into performance and efficiency tiers using the
+// per-CPU capacity the kernel derives for heterogeneous systems, such as Arm
+// big.LITTLE and Intel hybrid parts. Leaves the counts at `0` when no capacity
+// information is exposed or all cores share the same capacity.
+static void
+cpuinfo__topology(cpuinfo_cpu_t *cpu) {
+  long configured = sysconf(_SC_NPROCESSORS_CONF);
+
+  unsigned capacity = configured > 0 ? (unsigned) configured : 1;
+
+  char path[128];
+
+  uint64_t max_capacity = 0;
+  bool have_capacity = false;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", i);
+
+    uint64_t value = cpuinfo__sysfs_uint(path);
+
+    if (value == 0) continue;
+
+    have_capacity = true;
+
+    if (value > max_capacity) max_capacity = value;
+  }
+
+  if (!have_capacity) return;
+
+  uint32_t performance = 0;
+  uint32_t efficiency = 0;
+  bool heterogeneous = false;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", i);
+
+    uint64_t value = cpuinfo__sysfs_uint(path);
+
+    if (value == 0) continue;
+
+    // Count each physical core once, at its lowest-numbered hardware thread, so
+    // that simultaneous multithreading does not inflate the tally.
+    char siblings[128];
+
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", i);
+
+    if (cpuinfo__read_file(path, siblings, sizeof(siblings)) && (unsigned) strtoul(siblings, NULL, 10) != i) continue;
+
+    if (value < max_capacity) {
+      efficiency++;
+
+      heterogeneous = true;
+    } else {
+      performance++;
+    }
+  }
+
+  if (heterogeneous) {
+    cpu->performance_cores = performance;
+    cpu->efficiency_cores = efficiency;
+  }
 }
 
 static void
@@ -188,6 +372,13 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
       }
     }
   }
+
+  // A CPU-limited container can report fewer online logical processors than the
+  // package advertises threads, which would otherwise over-count physical cores.
+  if (cpu->physical_cores > cpu->logical_cores) cpu->physical_cores = cpu->logical_cores;
+
+  cpuinfo__topology(cpu);
+  cpuinfo__cache(cpu);
 
   // The maximum frequency is reported in kilohertz.
   char frequency[32];

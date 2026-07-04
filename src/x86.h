@@ -69,11 +69,19 @@ cpuinfo__cpuid_features(void) {
   uint32_t ecx = registers[2];
   uint32_t edx = registers[3];
 
-  if (edx & (1u << 26)) features |= cpuinfo_feature_sse2;
-  if (ecx & (1u << 0)) features |= cpuinfo_feature_sse3;
-  if (ecx & (1u << 9)) features |= cpuinfo_feature_ssse3;
-  if (ecx & (1u << 19)) features |= cpuinfo_feature_sse4_1;
-  if (ecx & (1u << 20)) features |= cpuinfo_feature_sse4_2;
+  if (edx & (1u << 26)) features |= cpuinfo_feature_x86_sse2;
+  if (ecx & (1u << 0)) features |= cpuinfo_feature_x86_sse3;
+  if (ecx & (1u << 9)) features |= cpuinfo_feature_x86_ssse3;
+  if (ecx & (1u << 19)) features |= cpuinfo_feature_x86_sse4_1;
+  if (ecx & (1u << 20)) features |= cpuinfo_feature_x86_sse4_2;
+
+  // These operate on general-purpose or legacy SSE register state, which is
+  // always enabled, so they do not depend on the OS having enabled the extended
+  // AVX state inspected below.
+  if (ecx & (1u << 23)) features |= cpuinfo_feature_x86_popcnt;
+  if (ecx & (1u << 25)) features |= cpuinfo_feature_x86_aes;
+  if (ecx & (1u << 1)) features |= cpuinfo_feature_x86_pclmulqdq;
+  if (ecx & (1u << 30)) features |= cpuinfo_feature_x86_rdrand;
 
   // The AVX register state must also be enabled by the OS before the extensions
   // that use it can be reported, which requires inspecting XCR0 via `xgetbv`.
@@ -85,8 +93,11 @@ cpuinfo__cpuid_features(void) {
   bool avx512_enabled = (xcr0 & 0xe6) == 0xe6; // XMM, YMM, and the AVX-512 opmask and ZMM state
 
   if (avx_enabled) {
-    if (ecx & (1u << 28)) features |= cpuinfo_feature_avx;
-    if (ecx & (1u << 12)) features |= cpuinfo_feature_fma;
+    if (ecx & (1u << 28)) features |= cpuinfo_feature_x86_avx;
+    if (ecx & (1u << 12)) features |= cpuinfo_feature_x86_fma;
+
+    // Half-precision conversion is VEX-encoded and so requires the AVX state.
+    if (ecx & (1u << 29)) features |= cpuinfo_feature_x86_f16c;
   }
 
   if (max_leaf >= 7) {
@@ -95,23 +106,50 @@ cpuinfo__cpuid_features(void) {
     uint32_t ebx7 = registers[1];
     uint32_t ecx7 = registers[2];
 
-    // The BMI extensions operate on general-purpose registers and so do not
-    // depend on extended register state.
-    if (ebx7 & (1u << 3)) features |= cpuinfo_feature_bmi;
-    if (ebx7 & (1u << 8)) features |= cpuinfo_feature_bmi2;
+    // These operate on general-purpose registers or legacy SSE state and so do
+    // not depend on the extended AVX register state.
+    if (ebx7 & (1u << 3)) features |= cpuinfo_feature_x86_bmi;
+    if (ebx7 & (1u << 8)) features |= cpuinfo_feature_x86_bmi2;
+    if (ebx7 & (1u << 29)) features |= cpuinfo_feature_x86_sha;
+    if (ebx7 & (1u << 18)) features |= cpuinfo_feature_x86_rdseed;
+    if (ebx7 & (1u << 19)) features |= cpuinfo_feature_x86_adx;
 
-    if (avx_enabled && (ebx7 & (1u << 5))) features |= cpuinfo_feature_avx2;
+    if (avx_enabled) {
+      if (ebx7 & (1u << 5)) features |= cpuinfo_feature_x86_avx2;
+
+      // The vectorized AES and carry-less multiply instructions are enumerated
+      // independently of AVX-512; their VEX-encoded forms need only the AVX
+      // state, while the 512-bit EVEX forms additionally require AVX-512.
+      if (ecx7 & (1u << 9)) features |= cpuinfo_feature_x86_vaes;
+      if (ecx7 & (1u << 10)) features |= cpuinfo_feature_x86_vpclmulqdq;
+    }
 
     if (avx512_enabled) {
-      if (ebx7 & (1u << 16)) features |= cpuinfo_feature_avx512f;
-      if (ebx7 & (1u << 28)) features |= cpuinfo_feature_avx512cd;
-      if (ebx7 & (1u << 31)) features |= cpuinfo_feature_avx512vl;
-      if (ecx7 & (1u << 12)) features |= cpuinfo_feature_avx512bitalg;
-      if (ecx7 & (1u << 14)) features |= cpuinfo_feature_avx512vpopcntdq;
+      if (ebx7 & (1u << 16)) features |= cpuinfo_feature_x86_avx512f;
+      if (ebx7 & (1u << 28)) features |= cpuinfo_feature_x86_avx512cd;
+      if (ebx7 & (1u << 31)) features |= cpuinfo_feature_x86_avx512vl;
+      if (ecx7 & (1u << 12)) features |= cpuinfo_feature_x86_avx512bitalg;
+      if (ecx7 & (1u << 14)) features |= cpuinfo_feature_x86_avx512vpopcntdq;
     }
   }
 
   return features;
+}
+
+// Report whether the CPU is a hybrid design with more than one type of core,
+// such as Intel's performance and efficiency cores. The per-core-type counts
+// themselves are obtained from the OS by the platform backends.
+static inline bool
+cpuinfo__cpuid_hybrid(void) {
+  uint32_t registers[4];
+
+  cpuinfo__cpuid(0, 0, registers);
+
+  if (registers[0] < 7) return false;
+
+  cpuinfo__cpuid(7, 0, registers);
+
+  return (registers[3] & (1u << 15)) != 0; // Hybrid bit in EDX.
 }
 
 // Read the vendor identification string into `dst`, a buffer of at least 13

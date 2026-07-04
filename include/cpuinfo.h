@@ -36,31 +36,59 @@ typedef enum {
  * support. Reported as a bitmask so that support for several extensions can be
  * queried at once. Intended to replace compile-time feature guards with a
  * runtime check.
+ *
+ * Each value is named for the architecture it belongs to and is only ever set
+ * on that architecture. A capability that exists in spirit on both, such as
+ * hardware AES, still has a distinct bit per architecture because the
+ * underlying instructions differ; portable callers that only care whether the
+ * capability is present should test both.
  */
 typedef enum {
   /**
    * Arm.
    */
-  cpuinfo_feature_neon = 1ull << 0,
+  cpuinfo_feature_arm_neon = 1ull << 0,    // Advanced SIMD.
+  cpuinfo_feature_arm_aes = 1ull << 1,     // AES acceleration.
+  cpuinfo_feature_arm_pmull = 1ull << 2,   // Polynomial multiply, for GHASH/GCM.
+  cpuinfo_feature_arm_sha1 = 1ull << 3,    // SHA-1 acceleration.
+  cpuinfo_feature_arm_sha2 = 1ull << 4,    // SHA-256 acceleration.
+  cpuinfo_feature_arm_sha512 = 1ull << 5,  // SHA-512 acceleration.
+  cpuinfo_feature_arm_sha3 = 1ull << 6,    // SHA-3 acceleration.
+  cpuinfo_feature_arm_crc32 = 1ull << 7,   // CRC-32 checksum acceleration.
+  cpuinfo_feature_arm_atomics = 1ull << 8, // Large System Extensions (LSE) atomics.
+  cpuinfo_feature_arm_dotprod = 1ull << 9, // Integer dot product.
+  cpuinfo_feature_arm_fp16 = 1ull << 10,   // Half-precision floating point.
+  cpuinfo_feature_arm_sve = 1ull << 11,    // Scalable Vector Extension.
+  cpuinfo_feature_arm_sve2 = 1ull << 12,   // Scalable Vector Extension 2.
 
   /**
-   * Intel.
+   * x86.
    */
-  cpuinfo_feature_sse2 = 1ull << 1,
-  cpuinfo_feature_sse3 = 1ull << 2,
-  cpuinfo_feature_ssse3 = 1ull << 3,
-  cpuinfo_feature_sse4_1 = 1ull << 4,
-  cpuinfo_feature_sse4_2 = 1ull << 5,
-  cpuinfo_feature_avx = 1ull << 6,
-  cpuinfo_feature_avx2 = 1ull << 7,
-  cpuinfo_feature_fma = 1ull << 8,
-  cpuinfo_feature_bmi = 1ull << 9,
-  cpuinfo_feature_bmi2 = 1ull << 10,
-  cpuinfo_feature_avx512f = 1ull << 11,
-  cpuinfo_feature_avx512cd = 1ull << 12,
-  cpuinfo_feature_avx512vl = 1ull << 13,
-  cpuinfo_feature_avx512bitalg = 1ull << 14,
-  cpuinfo_feature_avx512vpopcntdq = 1ull << 15,
+  cpuinfo_feature_x86_sse2 = 1ull << 13,
+  cpuinfo_feature_x86_sse3 = 1ull << 14,
+  cpuinfo_feature_x86_ssse3 = 1ull << 15,
+  cpuinfo_feature_x86_sse4_1 = 1ull << 16,
+  cpuinfo_feature_x86_sse4_2 = 1ull << 17,
+  cpuinfo_feature_x86_avx = 1ull << 18,
+  cpuinfo_feature_x86_avx2 = 1ull << 19,
+  cpuinfo_feature_x86_fma = 1ull << 20,
+  cpuinfo_feature_x86_bmi = 1ull << 21,
+  cpuinfo_feature_x86_bmi2 = 1ull << 22,
+  cpuinfo_feature_x86_avx512f = 1ull << 23,
+  cpuinfo_feature_x86_avx512cd = 1ull << 24,
+  cpuinfo_feature_x86_avx512vl = 1ull << 25,
+  cpuinfo_feature_x86_avx512bitalg = 1ull << 26,
+  cpuinfo_feature_x86_avx512vpopcntdq = 1ull << 27,
+  cpuinfo_feature_x86_aes = 1ull << 28,        // AES-NI.
+  cpuinfo_feature_x86_pclmulqdq = 1ull << 29,  // Carry-less multiply, for GHASH/GCM.
+  cpuinfo_feature_x86_sha = 1ull << 30,        // SHA-1 and SHA-256 acceleration.
+  cpuinfo_feature_x86_popcnt = 1ull << 31,     // Population count.
+  cpuinfo_feature_x86_rdrand = 1ull << 32,     // On-chip random number generator.
+  cpuinfo_feature_x86_rdseed = 1ull << 33,     // Seed-grade random number generator.
+  cpuinfo_feature_x86_adx = 1ull << 34,        // Multi-precision add-carry, for bignum arithmetic.
+  cpuinfo_feature_x86_f16c = 1ull << 35,       // Half-precision float conversion.
+  cpuinfo_feature_x86_vaes = 1ull << 36,       // Vectorized AES.
+  cpuinfo_feature_x86_vpclmulqdq = 1ull << 37, // Vectorized carry-less multiply.
 } cpuinfo_feature_t;
 
 /**
@@ -101,10 +129,35 @@ struct cpuinfo_cpu_s {
   uint32_t logical_cores;
 
   /**
+   * On a hybrid CPU with more than one type of core, the number of physical
+   * high-performance ("P") and energy-efficient ("E") cores, respectively.
+   * Both are `0` on a homogeneous CPU, or when the split cannot be determined;
+   * in that case treat all `physical_cores` as equivalent.
+   */
+  uint32_t performance_cores;
+  uint32_t efficiency_cores;
+
+  /**
    * The nominal frequency of the CPU, in hertz. `0` if unknown, as is the case
    * on platforms that do not report a fixed frequency.
    */
   uint64_t frequency;
+
+  /**
+   * The size, in bytes, of a cache line. `0` if unknown.
+   */
+  uint32_t cache_line;
+
+  /**
+   * The size, in bytes, of the per-core level 1 data and instruction caches,
+   * the per-core level 2 cache, and the shared level 3 cache, respectively.
+   * `0` for any cache level that is absent or could not be determined. On a
+   * hybrid CPU these report a representative core rather than every core type.
+   */
+  uint64_t l1d_cache;
+  uint64_t l1i_cache;
+  uint64_t l2_cache;
+  uint64_t l3_cache;
 
   /**
    * The total amount of installed physical memory, in bytes.

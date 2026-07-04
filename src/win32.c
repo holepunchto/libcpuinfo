@@ -9,6 +9,29 @@
 #include "../include/cpuinfo.h"
 #include "x86.h"
 
+// The processor-feature identifiers accepted by `IsProcessorFeaturePresent`.
+// They are defined here with fallbacks so that the Arm feature probes build
+// against older SDK headers; querying an identifier the running kernel does not
+// recognize simply returns `FALSE`.
+#ifndef PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE 30
+#endif
+#ifndef PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE 31
+#endif
+#ifndef PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE 34
+#endif
+#ifndef PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE 43
+#endif
+#ifndef PF_ARM_SHA3_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_SHA3_INSTRUCTIONS_AVAILABLE 64
+#endif
+#ifndef PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE
+#define PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE 65
+#endif
+
 // `SystemProcessorPerformanceInformation` and its result structure are not
 // declared in the public SDK headers, so they are reproduced here. The call is
 // resolved from `ntdll` at runtime.
@@ -77,15 +100,31 @@ cpuinfo__features(void) {
   return cpuinfo__cpuid_features();
 #else
   // Advanced SIMD is mandatory on the ARM64 systems Windows supports.
-  return cpuinfo_feature_neon;
+  uint64_t features = cpuinfo_feature_arm_neon;
+
+  // The Armv8 cryptographic extension is reported as a single coarse flag that
+  // implies the AES, PMULL, SHA-1, and SHA-256 instructions together.
+  if (IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)) {
+    features |= cpuinfo_feature_arm_aes | cpuinfo_feature_arm_pmull | cpuinfo_feature_arm_sha1 | cpuinfo_feature_arm_sha2;
+  }
+
+  if (IsProcessorFeaturePresent(PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_sha512;
+  if (IsProcessorFeaturePresent(PF_ARM_SHA3_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_sha3;
+  if (IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_crc32;
+  if (IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_atomics;
+  if (IsProcessorFeaturePresent(PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_dotprod;
+
+  return features;
 #endif
 }
 
-// Count physical cores across all processor groups. `GetLogicalProcessorInformationEx`
-// returns variable-length records that must be walked by their `Size` field, and
-// unlike the non-`Ex` form is not limited to the 64 processors of a single group.
+// Count physical cores across all processor groups and, on a hybrid CPU, split
+// them into performance and efficiency tiers by their efficiency class (higher
+// is more performant). `GetLogicalProcessorInformationEx` returns variable-length
+// records that must be walked by their `Size` field, and unlike the non-`Ex`
+// form is not limited to the 64 processors of a single group.
 static uint32_t
-cpuinfo__physical_cores(void) {
+cpuinfo__physical_cores(cpuinfo_cpu_t *cpu) {
   DWORD length = 0;
 
   GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
@@ -99,21 +138,96 @@ cpuinfo__physical_cores(void) {
   uint32_t count = 0;
 
   if (GetLogicalProcessorInformationEx(RelationProcessorCore, (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) buffer, &length)) {
-    BYTE *ptr = buffer;
     BYTE *end = buffer + length;
 
-    while (ptr < end) {
+    // Find the highest efficiency class present; those cores are the
+    // performance tier and any below them the efficiency tier.
+    BYTE top = 0;
+
+    for (BYTE *ptr = buffer; ptr < end;) {
       SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
 
-      if (record->Relationship == RelationProcessorCore) count++;
+      if (record->Relationship == RelationProcessorCore && record->Processor.EfficiencyClass > top) {
+        top = record->Processor.EfficiencyClass;
+      }
 
       ptr += record->Size;
+    }
+
+    uint32_t performance = 0;
+    uint32_t efficiency = 0;
+
+    for (BYTE *ptr = buffer; ptr < end;) {
+      SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
+
+      if (record->Relationship == RelationProcessorCore) {
+        count++;
+
+        if (record->Processor.EfficiencyClass < top) efficiency++;
+        else performance++;
+      }
+
+      ptr += record->Size;
+    }
+
+    // Only report a split when the cores actually differ; otherwise the CPU is
+    // homogeneous and the tiers are left at zero.
+    if (efficiency > 0) {
+      cpu->performance_cores = performance;
+      cpu->efficiency_cores = efficiency;
     }
   }
 
   free(buffer);
 
   return count;
+}
+
+// Fill in the cache sizes and line size by walking the cache relationships. On
+// a hybrid CPU the last record seen for each level wins, which is representative
+// of at least one core type.
+static void
+cpuinfo__cache(cpuinfo_cpu_t *cpu) {
+  DWORD length = 0;
+
+  GetLogicalProcessorInformationEx(RelationCache, NULL, &length);
+
+  if (length == 0) return;
+
+  BYTE *buffer = malloc(length);
+
+  if (buffer == NULL) return;
+
+  if (GetLogicalProcessorInformationEx(RelationCache, (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) buffer, &length)) {
+    BYTE *end = buffer + length;
+
+    for (BYTE *ptr = buffer; ptr < end;) {
+      SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
+
+      if (record->Relationship == RelationCache) {
+        CACHE_RELATIONSHIP *cache = &record->Cache;
+
+        if (cpu->cache_line == 0) cpu->cache_line = cache->LineSize;
+
+        switch (cache->Level) {
+        case 1:
+          if (cache->Type != CacheInstruction) cpu->l1d_cache = cache->CacheSize;
+          if (cache->Type != CacheData) cpu->l1i_cache = cache->CacheSize;
+          break;
+        case 2:
+          cpu->l2_cache = cache->CacheSize;
+          break;
+        case 3:
+          cpu->l3_cache = cache->CacheSize;
+          break;
+        }
+      }
+
+      ptr += record->Size;
+    }
+  }
+
+  free(buffer);
 }
 
 static void
@@ -148,9 +262,11 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
   // those in the calling thread's group, capping at 64.
   cpu->logical_cores = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
 
-  uint32_t physical = cpuinfo__physical_cores();
+  uint32_t physical = cpuinfo__physical_cores(cpu);
 
   cpu->physical_cores = physical > 0 ? physical : cpu->logical_cores;
+
+  cpuinfo__cache(cpu);
 
   // The advertised frequency is reported in megahertz by the registry.
   DWORD mhz = 0;

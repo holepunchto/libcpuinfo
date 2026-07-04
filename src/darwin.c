@@ -83,6 +83,15 @@ cpuinfo__arch(void) {
   return cpuinfo_arch_unknown;
 }
 
+// Report whether an optional-feature sysctl exists and is set. Absent keys
+// return `ENOENT`, which `cpuinfo__sysctl_uint()` reports as failure.
+static bool
+cpuinfo__sysctl_present(const char *name) {
+  uint64_t value = 0;
+
+  return cpuinfo__sysctl_uint(name, &value) && value != 0;
+}
+
 static uint64_t
 cpuinfo__features(void) {
 #if defined(CPUINFO_X86)
@@ -90,7 +99,35 @@ cpuinfo__features(void) {
 #else
   // Advanced SIMD is mandatory on AArch64 and present on the ARMv7 cores that
   // macOS has historically supported.
-  return cpuinfo_feature_neon;
+  uint64_t features = cpuinfo_feature_arm_neon;
+
+  // The optional Arm extensions are reported one sysctl per feature. Recent
+  // systems use the architectural `FEAT_` names; older ones use ad-hoc names,
+  // tried as a fallback. SVE is not implemented on Apple silicon.
+  static const struct {
+    const char *modern;
+    const char *legacy;
+    cpuinfo_feature_t feature;
+  } table[] = {
+    {"hw.optional.arm.FEAT_AES", NULL, cpuinfo_feature_arm_aes},
+    {"hw.optional.arm.FEAT_PMULL", NULL, cpuinfo_feature_arm_pmull},
+    {"hw.optional.arm.FEAT_SHA1", NULL, cpuinfo_feature_arm_sha1},
+    {"hw.optional.arm.FEAT_SHA256", NULL, cpuinfo_feature_arm_sha2},
+    {"hw.optional.arm.FEAT_SHA512", "hw.optional.armv8_2_sha512", cpuinfo_feature_arm_sha512},
+    {"hw.optional.arm.FEAT_SHA3", "hw.optional.armv8_2_sha3", cpuinfo_feature_arm_sha3},
+    {"hw.optional.arm.FEAT_CRC32", "hw.optional.armv8_crc32", cpuinfo_feature_arm_crc32},
+    {"hw.optional.arm.FEAT_LSE", "hw.optional.armv8_1_atomics", cpuinfo_feature_arm_atomics},
+    {"hw.optional.arm.FEAT_DotProd", NULL, cpuinfo_feature_arm_dotprod},
+    {"hw.optional.arm.FEAT_FP16", "hw.optional.neon_fp16", cpuinfo_feature_arm_fp16},
+  };
+
+  for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
+    if (cpuinfo__sysctl_present(table[i].modern) || (table[i].legacy != NULL && cpuinfo__sysctl_present(table[i].legacy))) {
+      features |= table[i].feature;
+    }
+  }
+
+  return features;
 #endif
 }
 
@@ -213,6 +250,26 @@ cpuinfo_init(cpuinfo_t **result) {
   cpu->logical_cores = cpuinfo__sysctl_uint("hw.logicalcpu", &value) ? (uint32_t) value : 0;
   cpu->frequency = cpuinfo__sysctl_uint("hw.cpufrequency", &value) ? value : 0;
   cpu->memory = cpuinfo__sysctl_uint("hw.memsize", &value) ? value : 0;
+
+  // On a hybrid CPU the kernel exposes one performance level per core type,
+  // ordered fastest first. Level 0 is the performance cluster and level 1 the
+  // efficiency cluster; a homogeneous CPU reports a single level.
+  if (cpuinfo__sysctl_uint("hw.nperflevels", &value) && value >= 2) {
+    uint64_t performance = 0;
+    uint64_t efficiency = 0;
+
+    cpuinfo__sysctl_uint("hw.perflevel0.physicalcpu", &performance);
+    cpuinfo__sysctl_uint("hw.perflevel1.physicalcpu", &efficiency);
+
+    cpu->performance_cores = (uint32_t) performance;
+    cpu->efficiency_cores = (uint32_t) efficiency;
+  }
+
+  cpu->cache_line = cpuinfo__sysctl_uint("hw.cachelinesize", &value) ? (uint32_t) value : 0;
+  cpu->l1d_cache = cpuinfo__sysctl_uint("hw.l1dcachesize", &value) ? value : 0;
+  cpu->l1i_cache = cpuinfo__sysctl_uint("hw.l1icachesize", &value) ? value : 0;
+  cpu->l2_cache = cpuinfo__sysctl_uint("hw.l2cachesize", &value) ? value : 0;
+  cpu->l3_cache = cpuinfo__sysctl_uint("hw.l3cachesize", &value) ? value : 0;
 
   // Take a baseline sample so that the first utilization query measures the
   // interval since initialization.
