@@ -751,49 +751,6 @@ cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result)
   return 0;
 }
 
-int
-cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result) {
-  if (index >= info->cores) return -1;
-
-  FILE *file = fopen("/proc/stat", "r");
-
-  if (file == NULL) return -1;
-
-  long ticks_per_second = sysconf(_SC_CLK_TCK);
-
-  uint64_t multiplier = ticks_per_second > 0 ? 1000ull / (uint64_t) ticks_per_second : 0;
-
-  char line[512];
-
-  int found = -1;
-
-  while (fgets(line, sizeof(line), file) != NULL) {
-    if (strncmp(line, "cpu", 3) != 0 || line[3] < '0' || line[3] > '9') continue;
-
-    unsigned id;
-    unsigned long long user = 0, nice = 0, system = 0, idle = 0, iowait = 0, irq = 0;
-
-    // Match the fields exposed by `uv_cpu_info()`, skipping iowait.
-    int n = sscanf(line + 3, "%u %llu %llu %llu %llu %llu %llu", &id, &user, &nice, &system, &idle, &iowait, &irq);
-
-    if (n < 5 || id != index) continue;
-
-    result->user = (uint64_t) user * multiplier;
-    result->nice = (uint64_t) nice * multiplier;
-    result->system = (uint64_t) system * multiplier;
-    result->idle = (uint64_t) idle * multiplier;
-    result->irq = (uint64_t) irq * multiplier;
-
-    found = 0;
-
-    break;
-  }
-
-  fclose(file);
-
-  return found;
-}
-
 cpuinfo_core_type_t
 cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
   if (index >= info->cores) return cpuinfo_core_type_unknown;

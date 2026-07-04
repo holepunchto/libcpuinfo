@@ -126,37 +126,21 @@ main() {
     err = cpuinfo_core_usage(info, i, &core);
     assert(err == 0);
 
-    cpuinfo_core_times_t times;
-
-    err = cpuinfo_core_times(info, i, &times);
-    assert(err == 0);
-
-    // The cumulative counters must have advanced since boot.
-    assert(times.user + times.nice + times.system + times.idle > 0);
-
     printf(
-      "  [%zu] %s %llu MHz, l1d %llu KiB l2 %llu KiB l3 %llu KiB, compute %.1f%%, times user=%llu nice=%llu sys=%llu idle=%llu irq=%llu\n",
+      "  [%zu] %s %llu MHz, l1d %llu KiB l2 %llu KiB l3 %llu KiB, compute %.1f%%\n",
       i,
       type_name(cpuinfo_core_type(info, i)),
       (unsigned long long) (cpuinfo_core_frequency(info, i) / 1000000),
       (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l1d) / 1024),
       (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l2) / 1024),
       (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l3) / 1024),
-      core.compute < 0 ? 0.0 : core.compute * 100.0,
-      (unsigned long long) times.user,
-      (unsigned long long) times.nice,
-      (unsigned long long) times.system,
-      (unsigned long long) times.idle,
-      (unsigned long long) times.irq
+      core.compute < 0 ? 0.0 : core.compute * 100.0
     );
   }
 
   // Out-of-range access must fail rather than crash.
   cpuinfo_usage_t core;
   assert(cpuinfo_core_usage(info, cores, &core) < 0);
-
-  cpuinfo_core_times_t times;
-  assert(cpuinfo_core_times(info, cores, &times) < 0);
 
   cpuinfo_destroy(info);
 

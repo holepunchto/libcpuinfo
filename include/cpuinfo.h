@@ -18,7 +18,6 @@ extern "C" {
 typedef struct cpuinfo_s cpuinfo_t;
 typedef struct cpuinfo_cpu_s cpuinfo_cpu_t;
 typedef struct cpuinfo_usage_s cpuinfo_usage_t;
-typedef struct cpuinfo_core_times_s cpuinfo_core_times_t;
 
 /**
  * The instruction set architecture of the CPU.
@@ -214,29 +213,6 @@ struct cpuinfo_usage_s {
 };
 
 /**
- * The cumulative time, in milliseconds, that a logical core has spent in each
- * scheduling state since boot. These are the raw counters from which
- * utilization is derived; sample them at two points in time and compare to
- * measure load over the interval. The units and fields match those reported by
- * `uv_cpu_info()`.
- */
-struct cpuinfo_core_times_s {
-  uint64_t user;
-
-  uint64_t nice;
-
-  uint64_t system;
-
-  uint64_t idle;
-
-  /**
-   * Time spent servicing interrupts. Always `0` on platforms that do not
-   * account for it separately, such as macOS.
-   */
-  uint64_t irq;
-};
-
-/**
  * Initialize a query context. The context detects the static properties of the
  * CPU up front, and additionally retains the state needed to compute
  * utilization as a delta between successive samples.
@@ -309,22 +285,6 @@ cpuinfo_core_count(const cpuinfo_t *info);
  */
 int
 cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result);
-
-/**
- * Read the cumulative scheduling times of the logical core at the given index,
- * where `index` is in the range `[0, cpuinfo_core_count())`.
- *
- * Unlike `cpuinfo_core_usage()`, this reads a fresh snapshot of the raw,
- * monotonically increasing counters on every call and does not touch the
- * sampling state used by `cpuinfo_cpu_usage()`. It is the stateless equivalent
- * of `uv_cpu_info()`, intended for callers that prefer to compute deltas
- * themselves.
- *
- * Returns `0` on success or a negative value on failure, such as when `index`
- * is out of range.
- */
-int
-cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result);
 
 /**
  * Get the type of the logical core at the given index, where `index` is in the

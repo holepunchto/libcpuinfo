@@ -501,42 +501,6 @@ cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result)
   return 0;
 }
 
-int
-cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result) {
-  if (index >= info->cores) return -1;
-
-  natural_t count;
-  processor_cpu_load_info_t load;
-  mach_msg_type_number_t info_count;
-
-  kern_return_t status = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &count, (processor_info_array_t *) &load, &info_count);
-
-  if (status != KERN_SUCCESS) return -1;
-
-  if (index >= count) {
-    vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
-
-    return -1;
-  }
-
-  // Convert ticks to milliseconds using the same scale as `uv_cpu_info()`.
-  long ticks_per_second = sysconf(_SC_CLK_TCK);
-
-  uint64_t multiplier = ticks_per_second > 0 ? 1000ull / (uint64_t) ticks_per_second : 0;
-
-  natural_t *ticks = load[index].cpu_ticks;
-
-  result->user = (uint64_t) ticks[CPU_STATE_USER] * multiplier;
-  result->nice = (uint64_t) ticks[CPU_STATE_NICE] * multiplier;
-  result->system = (uint64_t) ticks[CPU_STATE_SYSTEM] * multiplier;
-  result->idle = (uint64_t) ticks[CPU_STATE_IDLE] * multiplier;
-  result->irq = 0;
-
-  vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
-
-  return 0;
-}
-
 cpuinfo_core_type_t
 cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
   if (index >= info->cores) return cpuinfo_core_type_unknown;

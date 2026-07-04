@@ -677,42 +677,6 @@ cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result)
   return 0;
 }
 
-int
-cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result) {
-  if (index >= info->cores) return -1;
-
-  cpuinfo_processor_performance_t *performance = malloc(info->cores * sizeof(cpuinfo_processor_performance_t));
-
-  if (performance == NULL) return -1;
-
-  ULONG length = 0;
-
-  LONG status = info->query(CPUINFO_SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION, performance, (ULONG) (info->cores * sizeof(cpuinfo_processor_performance_t)), &length);
-
-  if (status < 0 || index >= length / sizeof(cpuinfo_processor_performance_t)) {
-    free(performance);
-
-    return -1;
-  }
-
-  uint64_t idle = (uint64_t) performance[index].IdleTime.QuadPart;
-  uint64_t kernel = (uint64_t) performance[index].KernelTime.QuadPart;
-  uint64_t user = (uint64_t) performance[index].UserTime.QuadPart;
-  uint64_t interrupt = (uint64_t) performance[index].InterruptTime.QuadPart;
-
-  // Convert 100-nanosecond intervals to milliseconds, matching `uv_cpu_info()`.
-  // On Windows `KernelTime` includes idle time.
-  result->user = user / 10000;
-  result->nice = 0;
-  result->system = (kernel - idle) / 10000;
-  result->idle = idle / 10000;
-  result->irq = interrupt / 10000;
-
-  free(performance);
-
-  return 0;
-}
-
 cpuinfo_core_type_t
 cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
   if (index >= info->cores) return cpuinfo_core_type_unknown;
