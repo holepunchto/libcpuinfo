@@ -113,8 +113,10 @@ main() {
 
   size_t cores = cpuinfo_core_count(info);
 
-  // Every logical core should be individually addressable.
-  assert(cores == cpu.logical_cores);
+  // The individually addressable cores are a subset of the logical cores: the
+  // two counts are derived independently and can differ when processors are
+  // offline or split across more than one processor group.
+  assert(cores <= cpu.logical_cores);
 
   printf("cores: %zu\n", cores);
 

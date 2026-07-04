@@ -61,6 +61,12 @@ struct cpuinfo_s {
   uint64_t *prev_busy;
   uint64_t *prev_total;
 
+  // Which core indices were present in the previous sample. Processors can be
+  // offline, leaving gaps in the otherwise contiguous `cpuN` numbering, so an
+  // index is only differenced against the previous sample when it appeared in
+  // both.
+  bool *prev_present;
+
   // The per-core compute utilization captured by the most recent
   // `cpuinfo_cpu_usage()` call, negative until the first such call.
   double *core_compute;
@@ -97,10 +103,16 @@ cpuinfo__proc_field(const char *content, const char *key, char *dst, size_t cap)
   const char *line = content;
 
   while (line != NULL && *line != '\0') {
+    // Require the key to be followed only by optional whitespace and then the
+    // `:` delimiter, so that a prefix such as "Model" does not match a longer
+    // field like "Model name".
     if (strncmp(line, key, key_len) == 0) {
-      const char *value = strchr(line, ':');
+      const char *value = line + key_len;
 
-      if (value != NULL) {
+      while (*value == ' ' || *value == '\t')
+        value++;
+
+      if (*value == ':') {
         value++;
 
         while (*value == ' ' || *value == '\t')
@@ -412,6 +424,9 @@ cpuinfo__detail(cpuinfo_t *info) {
 
 static void
 cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
+  // The fields read below ("model name", "siblings", "cpu cores") all appear in
+  // the first processor block, so a fixed buffer that captures the start of
+  // `/proc/cpuinfo` is sufficient even though the file grows with core count.
   char content[8192];
 
   bool have_cpuinfo = cpuinfo__read_file("/proc/cpuinfo", content, sizeof(content));
@@ -491,11 +506,20 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
 
 // Sample the cumulative busy and total CPU ticks per core from `/proc/stat`,
 // writing up to `capacity` entries and reporting the highest core index seen.
+// Entries are zeroed up front and `present[i]` records which indices the
+// sample actually populated, so that gaps left by offline processors are not
+// mistaken for real counters.
 static int
-cpuinfo__sample(uint64_t *busy, uint64_t *total, unsigned capacity, unsigned *cores) {
+cpuinfo__sample(uint64_t *busy, uint64_t *total, bool *present, unsigned capacity, unsigned *cores) {
   FILE *file = fopen("/proc/stat", "r");
 
   if (file == NULL) return -1;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    busy[i] = 0;
+    total[i] = 0;
+    present[i] = false;
+  }
 
   char line[512];
 
@@ -518,6 +542,7 @@ cpuinfo__sample(uint64_t *busy, uint64_t *total, unsigned capacity, unsigned *co
 
     busy[id] = busy_all;
     total[id] = busy_all + idle_all;
+    present[id] = true;
 
     if (id + 1 > max) max = id + 1;
   }
@@ -566,12 +591,14 @@ cpuinfo_init(cpuinfo_t **result) {
 
   info->prev_busy = malloc(info->capacity * sizeof(uint64_t));
   info->prev_total = malloc(info->capacity * sizeof(uint64_t));
+  info->prev_present = malloc(info->capacity * sizeof(bool));
   info->core_compute = malloc(info->capacity * sizeof(double));
   info->core = calloc(info->capacity, sizeof(cpuinfo_core_t));
 
-  if (info->prev_busy == NULL || info->prev_total == NULL || info->core_compute == NULL || info->core == NULL) {
+  if (info->prev_busy == NULL || info->prev_total == NULL || info->prev_present == NULL || info->core_compute == NULL || info->core == NULL) {
     free(info->prev_busy);
     free(info->prev_total);
+    free(info->prev_present);
     free(info->core_compute);
     free(info->core);
     free(info);
@@ -584,9 +611,10 @@ cpuinfo_init(cpuinfo_t **result) {
 
   // Take a baseline sample so that the first utilization query measures the
   // interval since initialization.
-  if (cpuinfo__sample(info->prev_busy, info->prev_total, info->capacity, &info->cores) != 0) {
+  if (cpuinfo__sample(info->prev_busy, info->prev_total, info->prev_present, info->capacity, &info->cores) != 0) {
     free(info->prev_busy);
     free(info->prev_total);
+    free(info->prev_present);
     free(info->core_compute);
     free(info->core);
     free(info);
@@ -612,6 +640,7 @@ cpuinfo_destroy(cpuinfo_t *info) {
 
   free(info->prev_busy);
   free(info->prev_total);
+  free(info->prev_present);
   free(info->core_compute);
   free(info->core);
   free(info);
@@ -646,19 +675,22 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
 
   uint64_t *busy = malloc(info->capacity * sizeof(uint64_t));
   uint64_t *total = malloc(info->capacity * sizeof(uint64_t));
+  bool *present = malloc(info->capacity * sizeof(bool));
 
-  if (busy == NULL || total == NULL) {
+  if (busy == NULL || total == NULL || present == NULL) {
     free(busy);
     free(total);
+    free(present);
 
     return -1;
   }
 
   unsigned cores;
 
-  if (cpuinfo__sample(busy, total, info->capacity, &cores) != 0) {
+  if (cpuinfo__sample(busy, total, present, info->capacity, &cores) != 0) {
     free(busy);
     free(total);
+    free(present);
 
     return -1;
   }
@@ -669,6 +701,14 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
   uint64_t total_delta = 0;
 
   for (unsigned i = 0; i < n; i++) {
+    // A core that was offline in either sample has no meaningful delta; report
+    // its utilization as unknown and leave it out of the aggregate.
+    if (!present[i] || !info->prev_present[i]) {
+      info->core_compute[i] = -1.0;
+
+      continue;
+    }
+
     uint64_t core_busy = busy[i] - info->prev_busy[i];
     uint64_t core_total = total[i] - info->prev_total[i];
 
@@ -684,11 +724,13 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
 
   memcpy(info->prev_busy, busy, info->capacity * sizeof(uint64_t));
   memcpy(info->prev_total, total, info->capacity * sizeof(uint64_t));
+  memcpy(info->prev_present, present, info->capacity * sizeof(bool));
 
   info->cores = cores;
 
   free(busy);
   free(total);
+  free(present);
 
   return 0;
 }

@@ -305,6 +305,12 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
 // Sample the cumulative busy and total 100-nanosecond intervals per core. On
 // Windows `KernelTime` includes idle time, so busy time is the kernel and user
 // time less the idle time.
+//
+// `SystemProcessorPerformanceInformation` reports only the processors in the
+// calling thread's processor group, which caps at 64. Systems with more than
+// one group (over 64 logical processors) are not supported for sampling: only
+// the processors of the first group are reported, and `cpuinfo_core_count()`
+// reflects that even though `logical_cores` still counts every group.
 static int
 cpuinfo__sample(cpuinfo_t *info, uint64_t *busy, uint64_t *total, unsigned *cores) {
   unsigned capacity = info->capacity;

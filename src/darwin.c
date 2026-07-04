@@ -24,9 +24,14 @@ typedef struct {
 struct cpuinfo_s {
   cpuinfo_cpu_t info;
 
-  // The number of logical processors reported by the kernel, i.e. the length of
-  // the per-core arrays below.
+  // The number of logical processors reported by the most recent sample, which
+  // is the addressable core count. It never exceeds `capacity`.
   natural_t cores;
+
+  // The capacity of the `core_compute` and `core` arrays, fixed at the count
+  // observed when the context was initialized. A later sample that reports more
+  // processors is clamped to this so the fixed-size arrays are never overrun.
+  natural_t capacity;
 
   // The cumulative busy and total CPU ticks per core at the previous sample,
   // used to derive utilization as a delta.
@@ -365,8 +370,12 @@ cpuinfo_init(cpuinfo_t **result) {
     return -1;
   }
 
-  info->core_compute = malloc(info->cores * sizeof(double));
-  info->core = calloc(info->cores, sizeof(cpuinfo_core_t));
+  // Size the fixed per-core arrays to the processor count observed now; a later
+  // sample is clamped to this capacity rather than growing them.
+  info->capacity = info->cores;
+
+  info->core_compute = malloc(info->capacity * sizeof(double));
+  info->core = calloc(info->capacity, sizeof(cpuinfo_core_t));
 
   if (info->core_compute == NULL || info->core == NULL) {
     free(info->prev_busy);
@@ -379,7 +388,7 @@ cpuinfo_init(cpuinfo_t **result) {
   }
 
   // No interval has elapsed yet, so per-core utilization is not yet available.
-  for (natural_t i = 0; i < info->cores; i++) {
+  for (natural_t i = 0; i < info->capacity; i++) {
     info->core_compute[i] = -1.0;
   }
 
@@ -424,9 +433,9 @@ cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature) {
 int
 cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
-  result->memory_used = 0;
   result->memory_total = info->info.memory;
 
+  // `cpuinfo__memory()` writes the field on every path, including failure.
   cpuinfo__memory(info->info.memory, &result->memory_used);
 
   info->memory_used = result->memory_used;
@@ -438,7 +447,8 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
   if (cpuinfo__sample(&busy, &total, &cores) != 0) return -1;
 
   // The processor count should be stable, but guard against a mismatch rather
-  // than read past either array.
+  // than read past either array. `prev_busy`/`prev_total` are sized to the
+  // previous sample, so the delta is bounded by it and the new count.
   natural_t n = cores < info->cores ? cores : info->cores;
 
   uint64_t busy_delta = 0;
@@ -448,7 +458,11 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
     uint64_t core_busy = busy[i] - info->prev_busy[i];
     uint64_t core_total = total[i] - info->prev_total[i];
 
-    info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : -1.0;
+    // `core_compute` is only `capacity` entries wide, so any processors beyond
+    // it are still counted in the aggregate but not addressable per core.
+    if (i < info->capacity) {
+      info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : -1.0;
+    }
 
     busy_delta += core_busy;
     total_delta += core_total;
@@ -463,7 +477,10 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
 
   info->prev_busy = busy;
   info->prev_total = total;
-  info->cores = cores;
+
+  // Clamp the addressable count to the fixed array capacity so the per-core
+  // getters, which bound-check against it, never index past `core`.
+  info->cores = cores < info->capacity ? cores : info->capacity;
 
   return 0;
 }

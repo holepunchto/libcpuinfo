@@ -43,53 +43,53 @@ typedef enum {
  * underlying instructions differ; portable callers that only care whether the
  * capability is present should test both.
  */
-typedef enum {
-  /**
-   * Arm.
-   */
-  cpuinfo_feature_arm_neon = 1ull << 0,    // Advanced SIMD.
-  cpuinfo_feature_arm_aes = 1ull << 1,     // AES acceleration.
-  cpuinfo_feature_arm_pmull = 1ull << 2,   // Polynomial multiply, for GHASH/GCM.
-  cpuinfo_feature_arm_sha1 = 1ull << 3,    // SHA-1 acceleration.
-  cpuinfo_feature_arm_sha2 = 1ull << 4,    // SHA-256 acceleration.
-  cpuinfo_feature_arm_sha512 = 1ull << 5,  // SHA-512 acceleration.
-  cpuinfo_feature_arm_sha3 = 1ull << 6,    // SHA-3 acceleration.
-  cpuinfo_feature_arm_crc32 = 1ull << 7,   // CRC-32 checksum acceleration.
-  cpuinfo_feature_arm_atomics = 1ull << 8, // Large System Extensions (LSE) atomics.
-  cpuinfo_feature_arm_dotprod = 1ull << 9, // Integer dot product.
-  cpuinfo_feature_arm_fp16 = 1ull << 10,   // Half-precision floating point.
-  cpuinfo_feature_arm_sve = 1ull << 11,    // Scalable Vector Extension.
-  cpuinfo_feature_arm_sve2 = 1ull << 12,   // Scalable Vector Extension 2.
+typedef uint64_t cpuinfo_feature_t;
 
-  /**
-   * x86.
-   */
-  cpuinfo_feature_x86_sse2 = 1ull << 13,
-  cpuinfo_feature_x86_sse3 = 1ull << 14,
-  cpuinfo_feature_x86_ssse3 = 1ull << 15,
-  cpuinfo_feature_x86_sse4_1 = 1ull << 16,
-  cpuinfo_feature_x86_sse4_2 = 1ull << 17,
-  cpuinfo_feature_x86_avx = 1ull << 18,
-  cpuinfo_feature_x86_avx2 = 1ull << 19,
-  cpuinfo_feature_x86_fma = 1ull << 20,
-  cpuinfo_feature_x86_bmi = 1ull << 21,
-  cpuinfo_feature_x86_bmi2 = 1ull << 22,
-  cpuinfo_feature_x86_avx512f = 1ull << 23,
-  cpuinfo_feature_x86_avx512cd = 1ull << 24,
-  cpuinfo_feature_x86_avx512vl = 1ull << 25,
-  cpuinfo_feature_x86_avx512bitalg = 1ull << 26,
-  cpuinfo_feature_x86_avx512vpopcntdq = 1ull << 27,
-  cpuinfo_feature_x86_aes = 1ull << 28,        // AES-NI.
-  cpuinfo_feature_x86_pclmulqdq = 1ull << 29,  // Carry-less multiply, for GHASH/GCM.
-  cpuinfo_feature_x86_sha = 1ull << 30,        // SHA-1 and SHA-256 acceleration.
-  cpuinfo_feature_x86_popcnt = 1ull << 31,     // Population count.
-  cpuinfo_feature_x86_rdrand = 1ull << 32,     // On-chip random number generator.
-  cpuinfo_feature_x86_rdseed = 1ull << 33,     // Seed-grade random number generator.
-  cpuinfo_feature_x86_adx = 1ull << 34,        // Multi-precision add-carry, for bignum arithmetic.
-  cpuinfo_feature_x86_f16c = 1ull << 35,       // Half-precision float conversion.
-  cpuinfo_feature_x86_vaes = 1ull << 36,       // Vectorized AES.
-  cpuinfo_feature_x86_vpclmulqdq = 1ull << 37, // Vectorized carry-less multiply.
-} cpuinfo_feature_t;
+/**
+ * Arm.
+ */
+#define cpuinfo_feature_arm_neon    (UINT64_C(1) << 0)  // Advanced SIMD.
+#define cpuinfo_feature_arm_aes     (UINT64_C(1) << 1)  // AES acceleration.
+#define cpuinfo_feature_arm_pmull   (UINT64_C(1) << 2)  // Polynomial multiply, for GHASH/GCM.
+#define cpuinfo_feature_arm_sha1    (UINT64_C(1) << 3)  // SHA-1 acceleration.
+#define cpuinfo_feature_arm_sha2    (UINT64_C(1) << 4)  // SHA-256 acceleration.
+#define cpuinfo_feature_arm_sha512  (UINT64_C(1) << 5)  // SHA-512 acceleration.
+#define cpuinfo_feature_arm_sha3    (UINT64_C(1) << 6)  // SHA-3 acceleration.
+#define cpuinfo_feature_arm_crc32   (UINT64_C(1) << 7)  // CRC-32 checksum acceleration.
+#define cpuinfo_feature_arm_atomics (UINT64_C(1) << 8)  // Large System Extensions (LSE) atomics.
+#define cpuinfo_feature_arm_dotprod (UINT64_C(1) << 9)  // Integer dot product.
+#define cpuinfo_feature_arm_fp16    (UINT64_C(1) << 10) // Half-precision floating point.
+#define cpuinfo_feature_arm_sve     (UINT64_C(1) << 11) // Scalable Vector Extension.
+#define cpuinfo_feature_arm_sve2    (UINT64_C(1) << 12) // Scalable Vector Extension 2.
+
+/**
+ * x86.
+ */
+#define cpuinfo_feature_x86_sse2            (UINT64_C(1) << 13)
+#define cpuinfo_feature_x86_sse3            (UINT64_C(1) << 14)
+#define cpuinfo_feature_x86_ssse3           (UINT64_C(1) << 15)
+#define cpuinfo_feature_x86_sse4_1          (UINT64_C(1) << 16)
+#define cpuinfo_feature_x86_sse4_2          (UINT64_C(1) << 17)
+#define cpuinfo_feature_x86_avx             (UINT64_C(1) << 18)
+#define cpuinfo_feature_x86_avx2            (UINT64_C(1) << 19)
+#define cpuinfo_feature_x86_fma             (UINT64_C(1) << 20)
+#define cpuinfo_feature_x86_bmi             (UINT64_C(1) << 21)
+#define cpuinfo_feature_x86_bmi2            (UINT64_C(1) << 22)
+#define cpuinfo_feature_x86_avx512f         (UINT64_C(1) << 23)
+#define cpuinfo_feature_x86_avx512cd        (UINT64_C(1) << 24)
+#define cpuinfo_feature_x86_avx512vl        (UINT64_C(1) << 25)
+#define cpuinfo_feature_x86_avx512bitalg    (UINT64_C(1) << 26)
+#define cpuinfo_feature_x86_avx512vpopcntdq (UINT64_C(1) << 27)
+#define cpuinfo_feature_x86_aes             (UINT64_C(1) << 28) // AES-NI.
+#define cpuinfo_feature_x86_pclmulqdq       (UINT64_C(1) << 29) // Carry-less multiply, for GHASH/GCM.
+#define cpuinfo_feature_x86_sha             (UINT64_C(1) << 30) // SHA-1 and SHA-256 acceleration.
+#define cpuinfo_feature_x86_popcnt          (UINT64_C(1) << 31) // Population count.
+#define cpuinfo_feature_x86_rdrand          (UINT64_C(1) << 32) // On-chip random number generator.
+#define cpuinfo_feature_x86_rdseed          (UINT64_C(1) << 33) // Seed-grade random number generator.
+#define cpuinfo_feature_x86_adx             (UINT64_C(1) << 34) // Multi-precision add-carry, for bignum arithmetic.
+#define cpuinfo_feature_x86_f16c            (UINT64_C(1) << 35) // Half-precision float conversion.
+#define cpuinfo_feature_x86_vaes            (UINT64_C(1) << 36) // Vectorized AES.
+#define cpuinfo_feature_x86_vpclmulqdq      (UINT64_C(1) << 37) // Vectorized carry-less multiply.
 
 /**
  * The role a logical core plays on a hybrid CPU. `unknown` is reported for a
@@ -287,7 +287,9 @@ cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result);
 
 /**
  * Get the number of logical cores that can be sampled individually with
- * `cpuinfo_core_usage()`.
+ * `cpuinfo_core_usage()`. This is usually equal to `logical_cores`, but may be
+ * smaller; on Windows only the first processor group is sampled, so a system
+ * with more than 64 logical processors reports at most 64 here.
  */
 size_t
 cpuinfo_core_count(const cpuinfo_t *info);
