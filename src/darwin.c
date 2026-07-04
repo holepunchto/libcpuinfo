@@ -235,13 +235,17 @@ cpuinfo__memory(uint64_t total, uint64_t *used) {
     return;
   }
 
-  // Approximate "memory used" as the pages that cannot be reclaimed without
-  // paging out, mirroring the figure reported by Activity Monitor.
-  uint64_t pages = (uint64_t) vm.active_count + vm.wire_count + vm.compressor_page_count;
+  // Mirror the "total minus available" definition the Linux and Windows backends
+  // use, so the figure is comparable across platforms. The memory available for
+  // a new allocation without paging is the free pages plus the reclaimable
+  // pools: the file-backed cache the kernel can evict (which already accounts
+  // for speculative read-ahead) and the purgeable pages it can discard. What
+  // remains - anonymous, wired, and compressed memory - is counted as in use.
+  uint64_t available = (uint64_t) vm.free_count + vm.external_page_count + vm.purgeable_count;
 
-  uint64_t bytes = pages * (uint64_t) page_size;
+  uint64_t available_bytes = available * (uint64_t) page_size;
 
-  *used = bytes > total ? total : bytes;
+  *used = available_bytes < total ? total - available_bytes : 0;
 }
 
 // Read a per-perflevel cache size sysctl, such as "hw.perflevel0.l2cachesize".

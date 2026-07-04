@@ -399,24 +399,40 @@ cpuinfo__detail(cpuinfo_t *info) {
   cpu->cache_line = line;
   cpu->l3_cache = info->core[0].cache[cpuinfo_cache_l3];
 
-  // Count physical cores per type, tallying each core once at its
-  // lowest-numbered hardware thread so that multithreading does not inflate it.
+  // Count physical cores by tallying each once at its lowest-numbered hardware
+  // thread, so that simultaneous multithreading does not inflate the count. The
+  // same walk splits the cores by type on a hybrid CPU, so the total and the
+  // per-type counts are derived from one source and always reconcile.
+  uint32_t physical = 0;
   uint32_t performance = 0;
   uint32_t efficiency = 0;
+  bool have_topology = false;
 
   for (unsigned i = 0; i < capacity; i++) {
-    if (info->core[i].type == cpuinfo_core_type_unknown) continue;
-
     char siblings[128];
     char path[128];
 
     snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", i);
 
-    if (cpuinfo__read_file(path, siblings, sizeof(siblings)) && (unsigned) strtoul(siblings, NULL, 10) != i) continue;
+    // A processor with no topology entry is offline or absent, so skip it. The
+    // lowest-numbered sibling represents the physical core; a thread that is not
+    // the lowest is a sibling of a core already counted.
+    if (!cpuinfo__read_file(path, siblings, sizeof(siblings))) continue;
+
+    have_topology = true;
+
+    if ((unsigned) strtoul(siblings, NULL, 10) != i) continue;
+
+    physical++;
 
     if (info->core[i].type == cpuinfo_core_type_performance) performance++;
-    else efficiency++;
+    else if (info->core[i].type == cpuinfo_core_type_efficiency) efficiency++;
   }
+
+  // Prefer the topology-derived physical count, which stays consistent with the
+  // per-type split above; fall back to the `/proc/cpuinfo` estimate from
+  // `cpuinfo__fill_static()` when the sysfs topology is not exposed.
+  if (have_topology && physical > 0) cpu->physical_cores = physical;
 
   cpu->performance_cores = performance;
   cpu->efficiency_cores = efficiency;
@@ -461,8 +477,11 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
 
   cpu->logical_cores = (uint32_t) sysconf(_SC_NPROCESSORS_ONLN);
 
-  // Derive the physical core count from the hyperthreading topology reported in
-  // `/proc/cpuinfo`, falling back to the logical count when it is absent.
+  // Estimate the physical core count from the hyperthreading topology reported
+  // in `/proc/cpuinfo`, falling back to the logical count when it is absent.
+  // This is only a baseline: `cpuinfo__detail()` refines it from the sysfs
+  // topology, which stays consistent with the per-type split on a hybrid CPU
+  // where this package-uniform estimate does not.
   cpu->physical_cores = cpu->logical_cores;
 
   if (have_cpuinfo) {
