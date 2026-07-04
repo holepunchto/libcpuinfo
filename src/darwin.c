@@ -1,0 +1,371 @@
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <mach/processor_info.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "../include/cpuinfo.h"
+#include "x86.h"
+
+struct cpuinfo_s {
+  cpuinfo_cpu_t info;
+
+  // The number of logical processors reported by the kernel, i.e. the length of
+  // the per-core arrays below.
+  natural_t cores;
+
+  // The cumulative busy and total CPU ticks per core at the previous sample,
+  // used to derive utilization as a delta.
+  uint64_t *prev_busy;
+  uint64_t *prev_total;
+
+  // The per-core compute utilization captured by the most recent
+  // `cpuinfo_cpu_usage()` call, negative until the first such call.
+  double *core_compute;
+
+  // The system-wide memory usage captured by the most recent
+  // `cpuinfo_cpu_usage()` call.
+  uint64_t memory_used;
+};
+
+static bool
+cpuinfo__sysctl_string(const char *name, char *dst, size_t cap) {
+  size_t len = cap;
+
+  if (sysctlbyname(name, dst, &len, NULL, 0) != 0) {
+    dst[0] = '\0';
+
+    return false;
+  }
+
+  dst[cap - 1] = '\0';
+
+  return true;
+}
+
+static bool
+cpuinfo__sysctl_uint(const char *name, uint64_t *result) {
+  // Zero-initialize so that a 32-bit result leaves the upper bytes clear on the
+  // little-endian architectures macOS runs on.
+  uint64_t value = 0;
+
+  size_t len = sizeof(value);
+
+  if (sysctlbyname(name, &value, &len, NULL, 0) != 0) return false;
+
+  *result = value;
+
+  return true;
+}
+
+static cpuinfo_arch_t
+cpuinfo__arch(void) {
+  uint64_t type = 0;
+
+  if (!cpuinfo__sysctl_uint("hw.cputype", &type)) return cpuinfo_arch_unknown;
+
+  // The 64-bit ABI flag from <mach/machine.h>, masked in for 64-bit variants.
+  bool is_64 = (type & 0x01000000) != 0;
+
+  switch (type & ~((uint64_t) 0x01000000)) {
+  case 7: // CPU_TYPE_X86
+    return is_64 ? cpuinfo_arch_x86_64 : cpuinfo_arch_x86;
+  case 12: // CPU_TYPE_ARM
+    return is_64 ? cpuinfo_arch_arm64 : cpuinfo_arch_arm;
+  }
+
+  return cpuinfo_arch_unknown;
+}
+
+static uint64_t
+cpuinfo__features(void) {
+#if defined(CPUINFO_X86)
+  return cpuinfo__cpuid_features();
+#else
+  // Advanced SIMD is mandatory on AArch64 and present on the ARMv7 cores that
+  // macOS has historically supported.
+  return cpuinfo_feature_neon;
+#endif
+}
+
+static void
+cpuinfo__fill_vendor(cpuinfo_cpu_t *cpu) {
+  char vendor[CPUINFO_NAME_MAX];
+
+  if (cpuinfo__sysctl_string("machdep.cpu.vendor", vendor, sizeof(vendor)) && vendor[0] != '\0') {
+    const char *name = vendor;
+
+    if (strcmp(vendor, "GenuineIntel") == 0) name = "Intel";
+    else if (strcmp(vendor, "AuthenticAMD") == 0) name = "AMD";
+
+    strncpy(cpu->vendor, name, sizeof(cpu->vendor) - 1);
+
+    cpu->vendor[sizeof(cpu->vendor) - 1] = '\0';
+
+    return;
+  }
+
+  // The vendor string is not exposed on Apple silicon.
+  if (cpu->arch == cpuinfo_arch_arm64 || cpu->arch == cpuinfo_arch_arm) {
+    strcpy(cpu->vendor, "Apple");
+  } else {
+    cpu->vendor[0] = '\0';
+  }
+}
+
+// Sample the cumulative busy and total CPU ticks per core. On success the
+// caller owns `*busy` and `*total`, which must be released with `free()`, and
+// `*cores` holds their length.
+static int
+cpuinfo__sample(uint64_t **busy, uint64_t **total, natural_t *cores) {
+  natural_t count;
+  processor_cpu_load_info_t load;
+  mach_msg_type_number_t info_count;
+
+  kern_return_t status = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &count, (processor_info_array_t *) &load, &info_count);
+
+  if (status != KERN_SUCCESS) return -1;
+
+  uint64_t *b = malloc(count * sizeof(uint64_t));
+  uint64_t *t = malloc(count * sizeof(uint64_t));
+
+  if (b == NULL || t == NULL) {
+    free(b);
+    free(t);
+
+    vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
+
+    return -1;
+  }
+
+  for (natural_t i = 0; i < count; i++) {
+    uint64_t user = load[i].cpu_ticks[CPU_STATE_USER];
+    uint64_t system = load[i].cpu_ticks[CPU_STATE_SYSTEM];
+    uint64_t idle = load[i].cpu_ticks[CPU_STATE_IDLE];
+    uint64_t nice = load[i].cpu_ticks[CPU_STATE_NICE];
+
+    b[i] = user + system + nice;
+    t[i] = user + system + nice + idle;
+  }
+
+  vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
+
+  *busy = b;
+  *total = t;
+  *cores = count;
+
+  return 0;
+}
+
+static void
+cpuinfo__memory(uint64_t total, uint64_t *used) {
+  vm_size_t page_size = 0;
+
+  if (host_page_size(mach_host_self(), &page_size) != KERN_SUCCESS || page_size == 0) {
+    *used = 0;
+
+    return;
+  }
+
+  vm_statistics64_data_t vm;
+  mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+
+  if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &vm, &count) != KERN_SUCCESS) {
+    *used = 0;
+
+    return;
+  }
+
+  // Approximate "memory used" as the pages that cannot be reclaimed without
+  // paging out, mirroring the figure reported by Activity Monitor.
+  uint64_t pages = (uint64_t) vm.active_count + vm.wire_count + vm.compressor_page_count;
+
+  uint64_t bytes = pages * (uint64_t) page_size;
+
+  *used = bytes > total ? total : bytes;
+}
+
+int
+cpuinfo_init(cpuinfo_t **result) {
+  cpuinfo_t *info = calloc(1, sizeof(cpuinfo_t));
+
+  if (info == NULL) return -1;
+
+  cpuinfo_cpu_t *cpu = &info->info;
+
+  cpuinfo__sysctl_string("machdep.cpu.brand_string", cpu->name, sizeof(cpu->name));
+
+  cpu->arch = cpuinfo__arch();
+
+  cpuinfo__fill_vendor(cpu);
+
+  cpu->features = cpuinfo__features();
+
+  uint64_t value;
+
+  cpu->physical_cores = cpuinfo__sysctl_uint("hw.physicalcpu", &value) ? (uint32_t) value : 0;
+  cpu->logical_cores = cpuinfo__sysctl_uint("hw.logicalcpu", &value) ? (uint32_t) value : 0;
+  cpu->frequency = cpuinfo__sysctl_uint("hw.cpufrequency", &value) ? value : 0;
+  cpu->memory = cpuinfo__sysctl_uint("hw.memsize", &value) ? value : 0;
+
+  // Take a baseline sample so that the first utilization query measures the
+  // interval since initialization.
+  if (cpuinfo__sample(&info->prev_busy, &info->prev_total, &info->cores) != 0) {
+    free(info);
+
+    return -1;
+  }
+
+  info->core_compute = malloc(info->cores * sizeof(double));
+
+  if (info->core_compute == NULL) {
+    free(info->prev_busy);
+    free(info->prev_total);
+    free(info);
+
+    return -1;
+  }
+
+  // No interval has elapsed yet, so per-core utilization is not yet available.
+  for (natural_t i = 0; i < info->cores; i++) {
+    info->core_compute[i] = -1.0;
+  }
+
+  cpuinfo__memory(cpu->memory, &info->memory_used);
+
+  *result = info;
+
+  return 0;
+}
+
+void
+cpuinfo_destroy(cpuinfo_t *info) {
+  if (info == NULL) return;
+
+  free(info->prev_busy);
+  free(info->prev_total);
+  free(info->core_compute);
+  free(info);
+}
+
+int
+cpuinfo_cpu_info(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
+  *result = info->info;
+
+  return 0;
+}
+
+uint64_t
+cpuinfo_features(const cpuinfo_t *info) {
+  return info->info.features;
+}
+
+bool
+cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature) {
+  return (info->info.features & (uint64_t) feature) != 0;
+}
+
+int
+cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
+  result->compute = -1.0;
+  result->memory_used = 0;
+  result->memory_total = info->info.memory;
+
+  cpuinfo__memory(info->info.memory, &result->memory_used);
+
+  info->memory_used = result->memory_used;
+
+  uint64_t *busy;
+  uint64_t *total;
+  natural_t cores;
+
+  if (cpuinfo__sample(&busy, &total, &cores) != 0) return -1;
+
+  // The processor count should be stable, but guard against a mismatch rather
+  // than read past either array.
+  natural_t n = cores < info->cores ? cores : info->cores;
+
+  uint64_t busy_delta = 0;
+  uint64_t total_delta = 0;
+
+  for (natural_t i = 0; i < n; i++) {
+    uint64_t core_busy = busy[i] - info->prev_busy[i];
+    uint64_t core_total = total[i] - info->prev_total[i];
+
+    info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : -1.0;
+
+    busy_delta += core_busy;
+    total_delta += core_total;
+  }
+
+  if (total_delta > 0) {
+    result->compute = (double) busy_delta / (double) total_delta;
+  }
+
+  free(info->prev_busy);
+  free(info->prev_total);
+
+  info->prev_busy = busy;
+  info->prev_total = total;
+  info->cores = cores;
+
+  return 0;
+}
+
+size_t
+cpuinfo_core_count(const cpuinfo_t *info) {
+  return info->cores;
+}
+
+int
+cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result) {
+  if (index >= info->cores) return -1;
+
+  result->compute = info->core_compute[index];
+  result->memory_used = info->memory_used;
+  result->memory_total = info->info.memory;
+
+  return 0;
+}
+
+int
+cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result) {
+  if (index >= info->cores) return -1;
+
+  natural_t count;
+  processor_cpu_load_info_t load;
+  mach_msg_type_number_t info_count;
+
+  kern_return_t status = host_processor_info(mach_host_self(), PROCESSOR_CPU_LOAD_INFO, &count, (processor_info_array_t *) &load, &info_count);
+
+  if (status != KERN_SUCCESS) return -1;
+
+  if (index >= count) {
+    vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
+
+    return -1;
+  }
+
+  // Convert ticks to milliseconds using the same scale as `uv_cpu_info()`.
+  long ticks_per_second = sysconf(_SC_CLK_TCK);
+
+  uint64_t multiplier = ticks_per_second > 0 ? 1000ull / (uint64_t) ticks_per_second : 0;
+
+  natural_t *ticks = load[index].cpu_ticks;
+
+  result->user = (uint64_t) ticks[CPU_STATE_USER] * multiplier;
+  result->nice = (uint64_t) ticks[CPU_STATE_NICE] * multiplier;
+  result->system = (uint64_t) ticks[CPU_STATE_SYSTEM] * multiplier;
+  result->idle = (uint64_t) ticks[CPU_STATE_IDLE] * multiplier;
+  result->irq = 0;
+
+  vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
+
+  return 0;
+}
