@@ -81,7 +81,7 @@ cpuinfo__cpuid_features(void) {
 
   uint64_t xcr0 = osxsave ? cpuinfo__xgetbv() : 0;
 
-  bool avx_enabled = (xcr0 & 0x6) == 0x6; // XMM and YMM state
+  bool avx_enabled = (xcr0 & 0x6) == 0x6;      // XMM and YMM state
   bool avx512_enabled = (xcr0 & 0xe6) == 0xe6; // XMM, YMM, and the AVX-512 opmask and ZMM state
 
   if (avx_enabled) {

@@ -68,7 +68,8 @@ cpuinfo__proc_field(const char *content, const char *key, char *dst, size_t cap)
       if (value != NULL) {
         value++;
 
-        while (*value == ' ' || *value == '\t') value++;
+        while (*value == ' ' || *value == '\t')
+          value++;
 
         const char *end = strchr(value, '\n');
 
@@ -174,8 +175,7 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
   if (have_cpuinfo) {
     char siblings[16], cores[16];
 
-    if (cpuinfo__proc_field(content, "siblings", siblings, sizeof(siblings)) &&
-        cpuinfo__proc_field(content, "cpu cores", cores, sizeof(cores))) {
+    if (cpuinfo__proc_field(content, "siblings", siblings, sizeof(siblings)) && cpuinfo__proc_field(content, "cpu cores", cores, sizeof(cores))) {
       unsigned long threads_per_package = strtoul(siblings, NULL, 10);
       unsigned long cores_per_package = strtoul(cores, NULL, 10);
 
