@@ -208,9 +208,9 @@ cpuinfo__physical_cores(cpuinfo_cpu_t *cpu) {
   return count;
 }
 
-// Fill in the cache sizes and line size by walking the cache relationships. On
-// a hybrid CPU the last record seen for each level wins, which is representative
-// of at least one core type.
+// Fill in the line size and the size of the shared last-level cache by walking
+// the cache relationships. The per-core level 1 and level 2 caches are captured
+// separately by `cpuinfo__detail()`.
 static void
 cpuinfo__cache(cpuinfo_cpu_t *cpu) {
   DWORD length = 0;
@@ -234,18 +234,7 @@ cpuinfo__cache(cpuinfo_cpu_t *cpu) {
 
         if (cpu->cache_line == 0) cpu->cache_line = cache->LineSize;
 
-        switch (cache->Level) {
-        case 1:
-          if (cache->Type != CacheInstruction) cpu->l1d_cache = cache->CacheSize;
-          if (cache->Type != CacheData) cpu->l1i_cache = cache->CacheSize;
-          break;
-        case 2:
-          cpu->l2_cache = cache->CacheSize;
-          break;
-        case 3:
-          cpu->l3_cache = cache->CacheSize;
-          break;
-        }
+        if (cache->Level == 3) cpu->l3_cache = cache->CacheSize;
       }
 
       ptr += record->Size;

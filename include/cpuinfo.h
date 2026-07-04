@@ -176,14 +176,11 @@ struct cpuinfo_cpu_s {
   uint32_t cache_line;
 
   /**
-   * The size, in bytes, of the per-core level 1 data and instruction caches,
-   * the per-core level 2 cache, and the shared level 3 cache, respectively.
-   * `0` for any cache level that is absent or could not be determined. On a
-   * hybrid CPU these report a representative core rather than every core type.
+   * The size, in bytes, of the shared last-level (level 3) cache, or `0` if it
+   * is absent or could not be determined. The level 1 and level 2 caches are
+   * private to a core and differ between core types on a hybrid CPU, so they
+   * are reported per core by `cpuinfo_core_cache()` rather than here.
    */
-  uint64_t l1d_cache;
-  uint64_t l1i_cache;
-  uint64_t l2_cache;
   uint64_t l3_cache;
 
   /**

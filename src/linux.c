@@ -382,12 +382,9 @@ cpuinfo__detail(cpuinfo_t *info) {
 
   cpuinfo__core_types(info);
 
-  // The first processor is representative of at least one core type; report its
-  // caches as the aggregate figures.
+  // The last-level cache is shared across cores, so the first processor reports
+  // the same figure as any other.
   cpu->cache_line = line;
-  cpu->l1d_cache = info->core[0].cache[cpuinfo_cache_l1d];
-  cpu->l1i_cache = info->core[0].cache[cpuinfo_cache_l1i];
-  cpu->l2_cache = info->core[0].cache[cpuinfo_cache_l2];
   cpu->l3_cache = info->core[0].cache[cpuinfo_cache_l3];
 
   // Count physical cores per type, tallying each core once at its

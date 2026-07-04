@@ -355,9 +355,6 @@ cpuinfo_init(cpuinfo_t **result) {
   }
 
   cpu->cache_line = cpuinfo__sysctl_uint("hw.cachelinesize", &value) ? (uint32_t) value : 0;
-  cpu->l1d_cache = cpuinfo__sysctl_uint("hw.l1dcachesize", &value) ? value : 0;
-  cpu->l1i_cache = cpuinfo__sysctl_uint("hw.l1icachesize", &value) ? value : 0;
-  cpu->l2_cache = cpuinfo__sysctl_uint("hw.l2cachesize", &value) ? value : 0;
   cpu->l3_cache = cpuinfo__sysctl_uint("hw.l3cachesize", &value) ? value : 0;
 
   // Take a baseline sample so that the first utilization query measures the

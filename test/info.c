@@ -55,11 +55,8 @@ main() {
   }
 
   printf(
-    "cache: line %u B, l1d %llu KiB, l1i %llu KiB, l2 %llu KiB, l3 %llu KiB\n",
+    "cache: line %u B, l3 %llu KiB\n",
     cpu.cache_line,
-    (unsigned long long) (cpu.l1d_cache / 1024),
-    (unsigned long long) (cpu.l1i_cache / 1024),
-    (unsigned long long) (cpu.l2_cache / 1024),
     (unsigned long long) (cpu.l3_cache / 1024)
   );
   printf("memory: %llu MiB\n", (unsigned long long) (cpu.memory / (1024 * 1024)));
