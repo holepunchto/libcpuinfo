@@ -44,6 +44,7 @@ elseif(WIN32)
     cpuinfo
     PUBLIC
       advapi32
+      powrprof
   )
 endif()
 

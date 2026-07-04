@@ -1,3 +1,8 @@
+// Required for `sched_setaffinity()` and the `cpu_set_t` macros, used to pin the
+// per-core type probe to each logical processor in turn.
+#define _GNU_SOURCE
+
+#include <sched.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -33,6 +38,13 @@
 #define CPUINFO_HWCAP2_SVE2 (1ul << 1)
 #endif
 
+// The static per-core detail captured once at initialization.
+typedef struct {
+  cpuinfo_core_type_t type;
+  uint64_t frequency;
+  uint64_t cache[CPUINFO_CACHE_LEVELS];
+} cpuinfo_core_t;
+
 struct cpuinfo_s {
   cpuinfo_cpu_t info;
 
@@ -52,6 +64,9 @@ struct cpuinfo_s {
   // The per-core compute utilization captured by the most recent
   // `cpuinfo_cpu_usage()` call, negative until the first such call.
   double *core_compute;
+
+  // The static per-core detail, indexed by logical processor.
+  cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
   // `cpuinfo_cpu_usage()` call.
@@ -206,17 +221,19 @@ cpuinfo__sysfs_size(const char *path) {
   return value;
 }
 
-// Fill in the cache sizes and line size from the topology that the kernel
-// exposes for the first logical processor, which is representative of at least
-// one core type on a hybrid CPU.
-static void
-cpuinfo__cache(cpuinfo_cpu_t *cpu) {
+// Read the cache sizes for a single logical processor into `cache`, indexed by
+// `cpuinfo_cache_level_t`, and return its coherency line size, or `0` if none
+// could be determined.
+static uint32_t
+cpuinfo__core_cache(unsigned cpu, uint64_t cache[CPUINFO_CACHE_LEVELS]) {
   char path[128];
+
+  uint32_t line = 0;
 
   for (unsigned i = 0;; i++) {
     char level_buf[16];
 
-    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/level", i);
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cache/index%u/level", cpu, i);
 
     // The cache index directories are contiguous, so a missing level marks the
     // end of the enumeration.
@@ -226,43 +243,74 @@ cpuinfo__cache(cpuinfo_cpu_t *cpu) {
 
     char type[16] = {0};
 
-    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/type", i);
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cache/index%u/type", cpu, i);
     cpuinfo__read_file(path, type, sizeof(type));
 
-    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/size", i);
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cache/index%u/size", cpu, i);
     uint64_t size = cpuinfo__sysfs_size(path);
 
-    if (cpu->cache_line == 0) {
-      snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu0/cache/index%u/coherency_line_size", i);
-      cpu->cache_line = (uint32_t) cpuinfo__sysfs_uint(path);
+    if (line == 0) {
+      snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cache/index%u/coherency_line_size", cpu, i);
+      line = (uint32_t) cpuinfo__sysfs_uint(path);
     }
 
     switch (level) {
     case 1:
       // A unified level 1 cache, if present, backs both roles.
-      if (type[0] != 'I') cpu->l1d_cache = size;
-      if (type[0] != 'D') cpu->l1i_cache = size;
+      if (type[0] != 'I') cache[cpuinfo_cache_l1d] = size;
+      if (type[0] != 'D') cache[cpuinfo_cache_l1i] = size;
       break;
     case 2:
-      cpu->l2_cache = size;
+      cache[cpuinfo_cache_l2] = size;
       break;
     case 3:
-      cpu->l3_cache = size;
+      cache[cpuinfo_cache_l3] = size;
       break;
     }
   }
+
+  return line;
 }
 
-// Classify physical cores into performance and efficiency tiers using the
-// per-CPU capacity the kernel derives for heterogeneous systems, such as Arm
-// big.LITTLE and Intel hybrid parts. Leaves the counts at `0` when no capacity
-// information is exposed or all cores share the same capacity.
+// Classify each logical processor as a performance or efficiency core. On x86
+// this reads the core type from `CPUID.1A` while pinned to each processor in
+// turn; on Arm it compares the per-CPU capacity the kernel derives for
+// heterogeneous systems. The types are left `unknown` on a homogeneous CPU.
 static void
-cpuinfo__topology(cpuinfo_cpu_t *cpu) {
-  long configured = sysconf(_SC_NPROCESSORS_CONF);
+cpuinfo__core_types(cpuinfo_t *info) {
+  unsigned capacity = info->capacity;
 
-  unsigned capacity = configured > 0 ? (unsigned) configured : 1;
+#if defined(CPUINFO_X86)
+  if (!cpuinfo__cpuid_hybrid()) return;
 
+  cpu_set_t original;
+
+  if (sched_getaffinity(0, sizeof(original), &original) != 0) return;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(i, &set);
+
+    // Pin to the target processor so that `CPUID.1A` reports its core type. A
+    // processor that is offline or outside the affinity mask is skipped.
+    if (sched_setaffinity(0, sizeof(set), &set) != 0) continue;
+
+    uint32_t registers[4];
+    cpuinfo__cpuid(0x1a, 0, registers);
+
+    switch (registers[0] >> 24) { // Core type in EAX[31:24].
+    case 0x20:                    // Intel Atom.
+      info->core[i].type = cpuinfo_core_type_efficiency;
+      break;
+    case 0x40: // Intel Core.
+      info->core[i].type = cpuinfo_core_type_performance;
+      break;
+    }
+  }
+
+  sched_setaffinity(0, sizeof(original), &original);
+#else
   char path[128];
 
   uint64_t max_capacity = 0;
@@ -282,8 +330,6 @@ cpuinfo__topology(cpuinfo_cpu_t *cpu) {
 
   if (!have_capacity) return;
 
-  uint32_t performance = 0;
-  uint32_t efficiency = 0;
   bool heterogeneous = false;
 
   for (unsigned i = 0; i < capacity; i++) {
@@ -293,27 +339,78 @@ cpuinfo__topology(cpuinfo_cpu_t *cpu) {
 
     if (value == 0) continue;
 
-    // Count each physical core once, at its lowest-numbered hardware thread, so
-    // that simultaneous multithreading does not inflate the tally.
+    if (value < max_capacity) {
+      info->core[i].type = cpuinfo_core_type_efficiency;
+
+      heterogeneous = true;
+    } else {
+      info->core[i].type = cpuinfo_core_type_performance;
+    }
+  }
+
+  // A single capacity across all cores is a homogeneous CPU, not a tier split.
+  if (!heterogeneous) {
+    for (unsigned i = 0; i < capacity; i++) {
+      info->core[i].type = cpuinfo_core_type_unknown;
+    }
+  }
+#endif
+}
+
+// Capture the static per-core detail and derive the aggregate figures on the
+// CPU snapshot from it.
+static void
+cpuinfo__detail(cpuinfo_t *info) {
+  cpuinfo_cpu_t *cpu = &info->info;
+
+  unsigned capacity = info->capacity;
+
+  uint32_t line = 0;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    char path[128];
+
+    snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpufreq/cpuinfo_max_freq", i);
+
+    // The maximum frequency is reported in kilohertz.
+    info->core[i].frequency = cpuinfo__sysfs_uint(path) * 1000;
+
+    uint32_t core_line = cpuinfo__core_cache(i, info->core[i].cache);
+
+    if (i == 0) line = core_line;
+  }
+
+  cpuinfo__core_types(info);
+
+  // The first processor is representative of at least one core type; report its
+  // caches as the aggregate figures.
+  cpu->cache_line = line;
+  cpu->l1d_cache = info->core[0].cache[cpuinfo_cache_l1d];
+  cpu->l1i_cache = info->core[0].cache[cpuinfo_cache_l1i];
+  cpu->l2_cache = info->core[0].cache[cpuinfo_cache_l2];
+  cpu->l3_cache = info->core[0].cache[cpuinfo_cache_l3];
+
+  // Count physical cores per type, tallying each core once at its
+  // lowest-numbered hardware thread so that multithreading does not inflate it.
+  uint32_t performance = 0;
+  uint32_t efficiency = 0;
+
+  for (unsigned i = 0; i < capacity; i++) {
+    if (info->core[i].type == cpuinfo_core_type_unknown) continue;
+
     char siblings[128];
+    char path[128];
 
     snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/topology/thread_siblings_list", i);
 
     if (cpuinfo__read_file(path, siblings, sizeof(siblings)) && (unsigned) strtoul(siblings, NULL, 10) != i) continue;
 
-    if (value < max_capacity) {
-      efficiency++;
-
-      heterogeneous = true;
-    } else {
-      performance++;
-    }
+    if (info->core[i].type == cpuinfo_core_type_performance) performance++;
+    else efficiency++;
   }
 
-  if (heterogeneous) {
-    cpu->performance_cores = performance;
-    cpu->efficiency_cores = efficiency;
-  }
+  cpu->performance_cores = performance;
+  cpu->efficiency_cores = efficiency;
 }
 
 static void
@@ -376,9 +473,6 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
   // A CPU-limited container can report fewer online logical processors than the
   // package advertises threads, which would otherwise over-count physical cores.
   if (cpu->physical_cores > cpu->logical_cores) cpu->physical_cores = cpu->logical_cores;
-
-  cpuinfo__topology(cpu);
-  cpuinfo__cache(cpu);
 
   // The maximum frequency is reported in kilohertz.
   char frequency[32];
@@ -476,15 +570,20 @@ cpuinfo_init(cpuinfo_t **result) {
   info->prev_busy = malloc(info->capacity * sizeof(uint64_t));
   info->prev_total = malloc(info->capacity * sizeof(uint64_t));
   info->core_compute = malloc(info->capacity * sizeof(double));
+  info->core = calloc(info->capacity, sizeof(cpuinfo_core_t));
 
-  if (info->prev_busy == NULL || info->prev_total == NULL || info->core_compute == NULL) {
+  if (info->prev_busy == NULL || info->prev_total == NULL || info->core_compute == NULL || info->core == NULL) {
     free(info->prev_busy);
     free(info->prev_total);
     free(info->core_compute);
+    free(info->core);
     free(info);
 
     return -1;
   }
+
+  // Capture the static per-core detail now that the arrays are sized.
+  cpuinfo__detail(info);
 
   // Take a baseline sample so that the first utilization query measures the
   // interval since initialization.
@@ -492,6 +591,7 @@ cpuinfo_init(cpuinfo_t **result) {
     free(info->prev_busy);
     free(info->prev_total);
     free(info->core_compute);
+    free(info->core);
     free(info);
 
     return -1;
@@ -516,6 +616,7 @@ cpuinfo_destroy(cpuinfo_t *info) {
   free(info->prev_busy);
   free(info->prev_total);
   free(info->core_compute);
+  free(info->core);
   free(info);
 }
 
@@ -652,4 +753,25 @@ cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *re
   fclose(file);
 
   return found;
+}
+
+cpuinfo_core_type_t
+cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return cpuinfo_core_type_unknown;
+
+  return info->core[index].type;
+}
+
+uint64_t
+cpuinfo_core_frequency(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return 0;
+
+  return info->core[index].frequency;
+}
+
+uint64_t
+cpuinfo_core_cache(const cpuinfo_t *info, size_t index, cpuinfo_cache_level_t level) {
+  if (index >= info->cores || (unsigned) level >= CPUINFO_CACHE_LEVELS) return 0;
+
+  return info->core[index].cache[level];
 }

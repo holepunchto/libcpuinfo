@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/sysctl.h>
@@ -12,6 +13,13 @@
 
 #include "../include/cpuinfo.h"
 #include "x86.h"
+
+// The static per-core detail captured once at initialization.
+typedef struct {
+  cpuinfo_core_type_t type;
+  uint64_t frequency;
+  uint64_t cache[CPUINFO_CACHE_LEVELS];
+} cpuinfo_core_t;
 
 struct cpuinfo_s {
   cpuinfo_cpu_t info;
@@ -28,6 +36,9 @@ struct cpuinfo_s {
   // The per-core compute utilization captured by the most recent
   // `cpuinfo_cpu_usage()` call, negative until the first such call.
   double *core_compute;
+
+  // The static per-core detail, indexed by logical processor.
+  cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
   // `cpuinfo_cpu_usage()` call.
@@ -228,6 +239,84 @@ cpuinfo__memory(uint64_t total, uint64_t *used) {
   *used = bytes > total ? total : bytes;
 }
 
+// Read a per-perflevel cache size sysctl, such as "hw.perflevel0.l2cachesize".
+static uint64_t
+cpuinfo__perflevel_cache(unsigned level, const char *leaf) {
+  char name[64];
+
+  snprintf(name, sizeof(name), "hw.perflevel%u.%s", level, leaf);
+
+  uint64_t value = 0;
+
+  return cpuinfo__sysctl_uint(name, &value) ? value : 0;
+}
+
+// Capture the static per-core detail. On a hybrid Apple silicon CPU the kernel
+// numbers logical processors with the efficiency cores first, which is the
+// reverse of the performance-level numbering, where level 0 is the performance
+// cluster. Each contiguous index range is mapped to its cluster accordingly.
+static void
+cpuinfo__detail(cpuinfo_t *info) {
+  natural_t cores = info->cores;
+
+  // A per-core maximum frequency is only exposed on Intel Macs; Apple silicon
+  // has no supported frequency sysctl, so it is left at zero there.
+  uint64_t frequency = 0;
+
+  if (!cpuinfo__sysctl_uint("hw.cpufrequency_max", &frequency)) {
+    cpuinfo__sysctl_uint("hw.cpufrequency", &frequency);
+  }
+
+  for (natural_t i = 0; i < cores; i++) {
+    info->core[i].frequency = frequency;
+  }
+
+  uint64_t levels = 0;
+
+  if (cpuinfo__sysctl_uint("hw.nperflevels", &levels) && levels >= 2) {
+    uint64_t efficiency = 0;
+
+    cpuinfo__sysctl_uint("hw.perflevel1.logicalcpu", &efficiency);
+
+    // Read each cluster's caches once, indexed by performance level.
+    uint64_t cache[2][CPUINFO_CACHE_LEVELS];
+
+    for (unsigned level = 0; level < 2; level++) {
+      cache[level][cpuinfo_cache_l1d] = cpuinfo__perflevel_cache(level, "l1dcachesize");
+      cache[level][cpuinfo_cache_l1i] = cpuinfo__perflevel_cache(level, "l1icachesize");
+      cache[level][cpuinfo_cache_l2] = cpuinfo__perflevel_cache(level, "l2cachesize");
+      cache[level][cpuinfo_cache_l3] = cpuinfo__perflevel_cache(level, "l3cachesize");
+    }
+
+    for (natural_t i = 0; i < cores; i++) {
+      // The efficiency cores occupy the low indices; the rest are performance.
+      unsigned level = i < efficiency ? 1 : 0;
+
+      info->core[i].type = level == 1 ? cpuinfo_core_type_efficiency : cpuinfo_core_type_performance;
+
+      for (unsigned l = 0; l < CPUINFO_CACHE_LEVELS; l++) {
+        info->core[i].cache[l] = cache[level][l];
+      }
+    }
+  } else {
+    // A homogeneous CPU has no core-type distinction; the caches are the same
+    // for every core and read from the top-level sysctls.
+    uint64_t cache[CPUINFO_CACHE_LEVELS];
+
+    uint64_t value = 0;
+    cache[cpuinfo_cache_l1d] = cpuinfo__sysctl_uint("hw.l1dcachesize", &value) ? value : 0;
+    cache[cpuinfo_cache_l1i] = cpuinfo__sysctl_uint("hw.l1icachesize", &value) ? value : 0;
+    cache[cpuinfo_cache_l2] = cpuinfo__sysctl_uint("hw.l2cachesize", &value) ? value : 0;
+    cache[cpuinfo_cache_l3] = cpuinfo__sysctl_uint("hw.l3cachesize", &value) ? value : 0;
+
+    for (natural_t i = 0; i < cores; i++) {
+      for (unsigned l = 0; l < CPUINFO_CACHE_LEVELS; l++) {
+        info->core[i].cache[l] = cache[l];
+      }
+    }
+  }
+}
+
 int
 cpuinfo_init(cpuinfo_t **result) {
   cpuinfo_t *info = calloc(1, sizeof(cpuinfo_t));
@@ -280,10 +369,13 @@ cpuinfo_init(cpuinfo_t **result) {
   }
 
   info->core_compute = malloc(info->cores * sizeof(double));
+  info->core = calloc(info->cores, sizeof(cpuinfo_core_t));
 
-  if (info->core_compute == NULL) {
+  if (info->core_compute == NULL || info->core == NULL) {
     free(info->prev_busy);
     free(info->prev_total);
+    free(info->core_compute);
+    free(info->core);
     free(info);
 
     return -1;
@@ -293,6 +385,9 @@ cpuinfo_init(cpuinfo_t **result) {
   for (natural_t i = 0; i < info->cores; i++) {
     info->core_compute[i] = -1.0;
   }
+
+  // Capture the static per-core detail now that the array is sized.
+  cpuinfo__detail(info);
 
   cpuinfo__memory(cpu->memory, &info->memory_used);
 
@@ -308,6 +403,7 @@ cpuinfo_destroy(cpuinfo_t *info) {
   free(info->prev_busy);
   free(info->prev_total);
   free(info->core_compute);
+  free(info->core);
   free(info);
 }
 
@@ -425,4 +521,25 @@ cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *re
   vm_deallocate(mach_task_self(), (vm_address_t) load, info_count * sizeof(integer_t));
 
   return 0;
+}
+
+cpuinfo_core_type_t
+cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return cpuinfo_core_type_unknown;
+
+  return info->core[index].type;
+}
+
+uint64_t
+cpuinfo_core_frequency(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return 0;
+
+  return info->core[index].frequency;
+}
+
+uint64_t
+cpuinfo_core_cache(const cpuinfo_t *info, size_t index, cpuinfo_cache_level_t level) {
+  if (index >= info->cores || (unsigned) level >= CPUINFO_CACHE_LEVELS) return 0;
+
+  return info->core[index].cache[level];
 }

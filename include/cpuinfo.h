@@ -92,6 +92,33 @@ typedef enum {
 } cpuinfo_feature_t;
 
 /**
+ * The role a logical core plays on a hybrid CPU. `unknown` is reported for a
+ * homogeneous CPU, or when the role could not be determined.
+ */
+typedef enum {
+  cpuinfo_core_type_unknown = 0,
+  cpuinfo_core_type_performance,
+  cpuinfo_core_type_efficiency,
+} cpuinfo_core_type_t;
+
+/**
+ * A cache level, used to select which cache `cpuinfo_core_cache()` reports. The
+ * two level 1 caches are distinguished as the data and instruction caches; the
+ * level 2 and level 3 caches are unified.
+ */
+typedef enum {
+  cpuinfo_cache_l1d = 0,
+  cpuinfo_cache_l1i,
+  cpuinfo_cache_l2,
+  cpuinfo_cache_l3,
+} cpuinfo_cache_level_t;
+
+/**
+ * The number of distinct cache levels reported by `cpuinfo_cache_level_t`.
+ */
+#define CPUINFO_CACHE_LEVELS 4
+
+/**
  * A snapshot of the CPU installed in the system. The values are static for the
  * lifetime of the process and describe the hardware rather than its current
  * load; see `cpuinfo_usage_t` for runtime utilization.
@@ -299,6 +326,37 @@ cpuinfo_core_usage(const cpuinfo_t *info, size_t index, cpuinfo_usage_t *result)
  */
 int
 cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *result);
+
+/**
+ * Get the type of the logical core at the given index, where `index` is in the
+ * range `[0, cpuinfo_core_count())`. Returns `cpuinfo_core_type_unknown` for an
+ * out-of-range index, a homogeneous CPU, or a platform that does not expose the
+ * distinction.
+ *
+ * Like the other static properties, the per-core detail is captured once at
+ * `cpuinfo_init()` and does not change over the lifetime of the context.
+ */
+cpuinfo_core_type_t
+cpuinfo_core_type(const cpuinfo_t *info, size_t index);
+
+/**
+ * Get the nominal maximum frequency, in hertz, of the logical core at the given
+ * index, where `index` is in the range `[0, cpuinfo_core_count())`. On a hybrid
+ * CPU the performance and efficiency cores typically differ. Returns `0` for an
+ * out-of-range index or when the per-core frequency is not reported, such as on
+ * Apple silicon.
+ */
+uint64_t
+cpuinfo_core_frequency(const cpuinfo_t *info, size_t index);
+
+/**
+ * Get the size, in bytes, of the given cache `level` for the logical core at
+ * the given index, where `index` is in the range `[0, cpuinfo_core_count())`.
+ * Returns `0` for an out-of-range index or level, or when the cache is absent
+ * or could not be determined.
+ */
+uint64_t
+cpuinfo_core_cache(const cpuinfo_t *info, size_t index, cpuinfo_cache_level_t level);
 
 #ifdef __cplusplus
 }

@@ -6,6 +6,8 @@
 
 #include <windows.h>
 
+#include <powrprof.h>
+
 #include "../include/cpuinfo.h"
 #include "x86.h"
 
@@ -46,7 +48,27 @@ typedef struct {
   ULONG InterruptCount;
 } cpuinfo_processor_performance_t;
 
+// `PROCESSOR_POWER_INFORMATION` is documented but was omitted from the SDK
+// headers, so its layout is reproduced here. `CallNtPowerInformation()` fills
+// one entry per logical processor with, among others, the maximum frequency in
+// megahertz.
+typedef struct {
+  ULONG Number;
+  ULONG MaxMhz;
+  ULONG CurrentMhz;
+  ULONG MhzLimit;
+  ULONG MaxIdleState;
+  ULONG CurrentIdleState;
+} cpuinfo_processor_power_t;
+
 typedef LONG(WINAPI *cpuinfo_query_t)(ULONG, PVOID, ULONG, PULONG);
+
+// The static per-core detail captured once at initialization.
+typedef struct {
+  cpuinfo_core_type_t type;
+  uint64_t frequency;
+  uint64_t cache[CPUINFO_CACHE_LEVELS];
+} cpuinfo_core_t;
 
 struct cpuinfo_s {
   cpuinfo_cpu_t info;
@@ -68,6 +90,9 @@ struct cpuinfo_s {
   // The per-core compute utilization captured by the most recent
   // `cpuinfo_cpu_usage()` call, negative until the first such call.
   double *core_compute;
+
+  // The static per-core detail, indexed by logical processor.
+  cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
   // `cpuinfo_cpu_usage()` call.
@@ -341,6 +366,155 @@ cpuinfo__memory(uint64_t *used) {
   }
 }
 
+// Capture the static per-core detail: the core type, maximum frequency, and
+// cache sizes, each keyed to the flat logical processor index used elsewhere.
+// A processor group's mask is group-relative, so it is offset by the number of
+// processors in the preceding groups to recover that flat index.
+static void
+cpuinfo__detail(cpuinfo_t *info) {
+  unsigned capacity = info->capacity;
+
+  WORD groups = GetActiveProcessorGroupCount();
+
+  DWORD *base = malloc((groups > 0 ? groups : 1) * sizeof(DWORD));
+
+  if (base == NULL) return;
+
+  DWORD total = 0;
+
+  for (WORD g = 0; g < groups; g++) {
+    base[g] = total;
+    total += GetActiveProcessorCount(g);
+  }
+
+  // Per-core type from the efficiency class, higher being more performant.
+  DWORD length = 0;
+
+  GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
+
+  BYTE *buffer = length > 0 ? malloc(length) : NULL;
+
+  if (buffer != NULL && GetLogicalProcessorInformationEx(RelationProcessorCore, (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) buffer, &length)) {
+    BYTE *end = buffer + length;
+
+    BYTE top = 0;
+
+    for (BYTE *ptr = buffer; ptr < end;) {
+      SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
+
+      if (record->Relationship == RelationProcessorCore && record->Processor.EfficiencyClass > top) {
+        top = record->Processor.EfficiencyClass;
+      }
+
+      ptr += record->Size;
+    }
+
+    // The type is left unknown on a homogeneous CPU, where every class is zero.
+    if (top > 0) {
+      for (BYTE *ptr = buffer; ptr < end;) {
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
+
+        if (record->Relationship == RelationProcessorCore) {
+          cpuinfo_core_type_t type = record->Processor.EfficiencyClass < top ? cpuinfo_core_type_efficiency : cpuinfo_core_type_performance;
+
+          for (WORD gi = 0; gi < record->Processor.GroupCount; gi++) {
+            GROUP_AFFINITY mask = record->Processor.GroupMask[gi];
+
+            if (mask.Group >= groups) continue;
+
+            for (unsigned b = 0; b < sizeof(KAFFINITY) * 8; b++) {
+              if ((mask.Mask >> b) & 1) {
+                DWORD index = base[mask.Group] + b;
+
+                if (index < capacity) info->core[index].type = type;
+              }
+            }
+          }
+        }
+
+        ptr += record->Size;
+      }
+    }
+  }
+
+  free(buffer);
+
+  // Per-core cache sizes. Each cache lists the processors that share it; the
+  // single `GroupMask` covers one processor group, sufficient for the common
+  // case of a system with a single group.
+  length = 0;
+
+  GetLogicalProcessorInformationEx(RelationCache, NULL, &length);
+
+  buffer = length > 0 ? malloc(length) : NULL;
+
+  if (buffer != NULL && GetLogicalProcessorInformationEx(RelationCache, (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) buffer, &length)) {
+    BYTE *end = buffer + length;
+
+    for (BYTE *ptr = buffer; ptr < end;) {
+      SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *record = (SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *) ptr;
+
+      if (record->Relationship == RelationCache) {
+        CACHE_RELATIONSHIP *cache = &record->Cache;
+
+        GROUP_AFFINITY mask = cache->GroupMask;
+
+        if (mask.Group < groups) {
+          for (unsigned b = 0; b < sizeof(KAFFINITY) * 8; b++) {
+            if (((mask.Mask >> b) & 1) == 0) continue;
+
+            DWORD index = base[mask.Group] + b;
+
+            if (index >= capacity) continue;
+
+            uint64_t *c = info->core[index].cache;
+
+            switch (cache->Level) {
+            case 1:
+              if (cache->Type != CacheInstruction) c[cpuinfo_cache_l1d] = cache->CacheSize;
+              if (cache->Type != CacheData) c[cpuinfo_cache_l1i] = cache->CacheSize;
+              break;
+            case 2:
+              c[cpuinfo_cache_l2] = cache->CacheSize;
+              break;
+            case 3:
+              c[cpuinfo_cache_l3] = cache->CacheSize;
+              break;
+            }
+          }
+        }
+      }
+
+      ptr += record->Size;
+    }
+  }
+
+  free(buffer);
+
+  // Per-core maximum frequency. `CallNtPowerInformation()` reports only the
+  // processors in the calling thread's group, so its group-relative numbers are
+  // mapped back to flat indices; other groups are left without a frequency.
+  cpuinfo_processor_power_t *power = malloc(capacity * sizeof(cpuinfo_processor_power_t));
+
+  if (power != NULL) {
+    PROCESSOR_NUMBER current;
+    GetCurrentProcessorNumberEx(&current);
+
+    DWORD in_group = current.Group < groups ? GetActiveProcessorCount(current.Group) : 0;
+
+    if (in_group > 0 && CallNtPowerInformation(ProcessorInformation, NULL, 0, power, (ULONG) (in_group * sizeof(cpuinfo_processor_power_t))) == 0) {
+      for (DWORD i = 0; i < in_group; i++) {
+        DWORD index = base[current.Group] + power[i].Number;
+
+        if (index < capacity) info->core[index].frequency = (uint64_t) power[i].MaxMhz * 1000000;
+      }
+    }
+  }
+
+  free(power);
+  free(base);
+}
+
 int
 cpuinfo_init(cpuinfo_t **result) {
   cpuinfo_t *info = calloc(1, sizeof(cpuinfo_t));
@@ -366,15 +540,20 @@ cpuinfo_init(cpuinfo_t **result) {
   info->prev_busy = malloc(info->capacity * sizeof(uint64_t));
   info->prev_total = malloc(info->capacity * sizeof(uint64_t));
   info->core_compute = malloc(info->capacity * sizeof(double));
+  info->core = calloc(info->capacity, sizeof(cpuinfo_core_t));
 
-  if (info->prev_busy == NULL || info->prev_total == NULL || info->core_compute == NULL) {
+  if (info->prev_busy == NULL || info->prev_total == NULL || info->core_compute == NULL || info->core == NULL) {
     free(info->prev_busy);
     free(info->prev_total);
     free(info->core_compute);
+    free(info->core);
     free(info);
 
     return -1;
   }
+
+  // Capture the static per-core detail now that the arrays are sized.
+  cpuinfo__detail(info);
 
   // Take a baseline sample so that the first utilization query measures the
   // interval since initialization.
@@ -382,6 +561,7 @@ cpuinfo_init(cpuinfo_t **result) {
     free(info->prev_busy);
     free(info->prev_total);
     free(info->core_compute);
+    free(info->core);
     free(info);
 
     return -1;
@@ -406,6 +586,7 @@ cpuinfo_destroy(cpuinfo_t *info) {
   free(info->prev_busy);
   free(info->prev_total);
   free(info->core_compute);
+  free(info->core);
   free(info);
 }
 
@@ -535,4 +716,25 @@ cpuinfo_core_times(const cpuinfo_t *info, size_t index, cpuinfo_core_times_t *re
   free(performance);
 
   return 0;
+}
+
+cpuinfo_core_type_t
+cpuinfo_core_type(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return cpuinfo_core_type_unknown;
+
+  return info->core[index].type;
+}
+
+uint64_t
+cpuinfo_core_frequency(const cpuinfo_t *info, size_t index) {
+  if (index >= info->cores) return 0;
+
+  return info->core[index].frequency;
+}
+
+uint64_t
+cpuinfo_core_cache(const cpuinfo_t *info, size_t index, cpuinfo_cache_level_t level) {
+  if (index >= info->cores || (unsigned) level >= CPUINFO_CACHE_LEVELS) return 0;
+
+  return info->core[index].cache[level];
 }

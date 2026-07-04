@@ -4,6 +4,19 @@
 #include "../include/cpuinfo.h"
 
 static const char *
+type_name(cpuinfo_core_type_t type) {
+  switch (type) {
+  case cpuinfo_core_type_performance:
+    return "P";
+  case cpuinfo_core_type_efficiency:
+    return "E";
+  case cpuinfo_core_type_unknown:
+  default:
+    return "-";
+  }
+}
+
+static const char *
 arch_name(cpuinfo_arch_t arch) {
   switch (arch) {
   case cpuinfo_arch_x86:
@@ -123,8 +136,13 @@ main() {
     assert(times.user + times.nice + times.system + times.idle > 0);
 
     printf(
-      "  [%zu] compute %.1f%%, times user=%llu nice=%llu sys=%llu idle=%llu irq=%llu\n",
+      "  [%zu] %s %llu MHz, l1d %llu KiB l2 %llu KiB l3 %llu KiB, compute %.1f%%, times user=%llu nice=%llu sys=%llu idle=%llu irq=%llu\n",
       i,
+      type_name(cpuinfo_core_type(info, i)),
+      (unsigned long long) (cpuinfo_core_frequency(info, i) / 1000000),
+      (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l1d) / 1024),
+      (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l2) / 1024),
+      (unsigned long long) (cpuinfo_core_cache(info, i, cpuinfo_cache_l3) / 1024),
       core.compute < 0 ? 0.0 : core.compute * 100.0,
       (unsigned long long) times.user,
       (unsigned long long) times.nice,
