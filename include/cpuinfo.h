@@ -166,17 +166,11 @@ struct cpuinfo_cpu_s {
   uint64_t frequency;
 
   /**
-   * The size, in bytes, of a cache line. `0` if unknown.
+   * The size, in bytes, of a cache line. `0` if unknown. The cache sizes
+   * themselves are private to a core, and differ between core types on a hybrid
+   * CPU, so they are reported per core by `cpuinfo_core_cache()`.
    */
   uint32_t cache_line;
-
-  /**
-   * The size, in bytes, of the shared last-level (level 3) cache, or `0` if it
-   * is absent or could not be determined. The level 1 and level 2 caches are
-   * private to a core and differ between core types on a hybrid CPU, so they
-   * are reported per core by `cpuinfo_core_cache()` rather than here.
-   */
-  uint64_t l3_cache;
 
   /**
    * The total amount of installed physical memory, in bytes.

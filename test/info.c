@@ -54,11 +54,7 @@ main() {
     printf("hybrid: %u performance, %u efficiency\n", cpu.performance_cores, cpu.efficiency_cores);
   }
 
-  printf(
-    "cache: line %u B, l3 %llu KiB\n",
-    cpu.cache_line,
-    (unsigned long long) (cpu.l3_cache / 1024)
-  );
+  printf("cache: line %u B\n", cpu.cache_line);
   printf("memory: %llu MiB\n", (unsigned long long) (cpu.memory / (1024 * 1024)));
 
   // A logical core count of zero would indicate detection failed entirely.

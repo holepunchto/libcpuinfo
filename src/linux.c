@@ -395,15 +395,17 @@ cpuinfo__detail(cpuinfo_t *info) {
 
     uint32_t core_line = cpuinfo__core_cache(i, info->core[i].cache);
 
-    if (i == 0) line = core_line;
+    // The line size is uniform across cores, so take it from the first core
+    // that reports one rather than assuming cpu0 is online; an offline or absent
+    // processor yields zeroes from the sysfs reads above.
+    if (line == 0) line = core_line;
   }
 
   cpuinfo__core_types(info);
 
-  // The last-level cache is shared across cores, so the first processor reports
-  // the same figure as any other.
+  // The coherency line size is uniform across cores. The cache sizes, including
+  // the level 3 cache, are retained per core rather than aggregated here.
   cpu->cache_line = line;
-  cpu->l3_cache = info->core[0].cache[cpuinfo_cache_l3];
 
   // Count physical cores by tallying each once at its lowest-numbered hardware
   // thread, so that simultaneous multithreading does not inflate the count. The
