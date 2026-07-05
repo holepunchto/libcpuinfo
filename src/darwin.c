@@ -39,14 +39,14 @@ struct cpuinfo_s {
   uint64_t *prev_total;
 
   // The per-core compute utilization captured by the most recent
-  // `cpuinfo_cpu_usage()` call, negative until the first such call.
+  // `cpuinfo_sample()` call, negative until the first such call.
   double *core_compute;
 
   // The static per-core detail, indexed by logical processor.
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_cpu_usage()` call.
+  // `cpuinfo_sample()` call.
   uint64_t memory_used;
 };
 
@@ -108,40 +108,35 @@ cpuinfo__sysctl_present(const char *name) {
   return cpuinfo__sysctl_uint(name, &value) && value != 0;
 }
 
-static uint64_t
+static cpuinfo_features_t
 cpuinfo__features(void) {
 #if defined(CPUINFO_X86)
   return cpuinfo__cpuid_features();
 #else
+  cpuinfo_features_t features = {0};
+
   // Advanced SIMD is mandatory on AArch64 and present on the ARMv7 cores that
   // macOS has historically supported.
-  uint64_t features = cpuinfo_feature_arm_neon;
+  features.arm_neon = true;
 
   // The optional Arm extensions are reported one sysctl per feature. Recent
   // systems use the architectural `FEAT_` names; older ones use ad-hoc names,
   // tried as a fallback. SVE is not implemented on Apple silicon.
-  static const struct {
-    const char *modern;
-    const char *legacy;
-    cpuinfo_feature_t feature;
-  } table[] = {
-    {"hw.optional.arm.FEAT_AES", NULL, cpuinfo_feature_arm_aes},
-    {"hw.optional.arm.FEAT_PMULL", NULL, cpuinfo_feature_arm_pmull},
-    {"hw.optional.arm.FEAT_SHA1", NULL, cpuinfo_feature_arm_sha1},
-    {"hw.optional.arm.FEAT_SHA256", NULL, cpuinfo_feature_arm_sha2},
-    {"hw.optional.arm.FEAT_SHA512", "hw.optional.armv8_2_sha512", cpuinfo_feature_arm_sha512},
-    {"hw.optional.arm.FEAT_SHA3", "hw.optional.armv8_2_sha3", cpuinfo_feature_arm_sha3},
-    {"hw.optional.arm.FEAT_CRC32", "hw.optional.armv8_crc32", cpuinfo_feature_arm_crc32},
-    {"hw.optional.arm.FEAT_LSE", "hw.optional.armv8_1_atomics", cpuinfo_feature_arm_atomics},
-    {"hw.optional.arm.FEAT_DotProd", NULL, cpuinfo_feature_arm_dotprod},
-    {"hw.optional.arm.FEAT_FP16", "hw.optional.neon_fp16", cpuinfo_feature_arm_fp16},
-  };
+#define CPUINFO__SYSCTL_PRESENT(modern, legacy) \
+  (cpuinfo__sysctl_present(modern) || ((legacy) != NULL && cpuinfo__sysctl_present(legacy)))
 
-  for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
-    if (cpuinfo__sysctl_present(table[i].modern) || (table[i].legacy != NULL && cpuinfo__sysctl_present(table[i].legacy))) {
-      features |= table[i].feature;
-    }
-  }
+  features.arm_aes = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_AES", NULL);
+  features.arm_pmull = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_PMULL", NULL);
+  features.arm_sha1 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_SHA1", NULL);
+  features.arm_sha2 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_SHA256", NULL);
+  features.arm_sha512 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_SHA512", "hw.optional.armv8_2_sha512");
+  features.arm_sha3 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_SHA3", "hw.optional.armv8_2_sha3");
+  features.arm_crc32 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_CRC32", "hw.optional.armv8_crc32");
+  features.arm_atomics = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_LSE", "hw.optional.armv8_1_atomics");
+  features.arm_dotprod = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_DotProd", NULL);
+  features.arm_fp16 = CPUINFO__SYSCTL_PRESENT("hw.optional.arm.FEAT_FP16", "hw.optional.neon_fp16");
+
+#undef CPUINFO__SYSCTL_PRESENT
 
   return features;
 #endif
@@ -418,24 +413,21 @@ cpuinfo_destroy(cpuinfo_t *info) {
 }
 
 int
-cpuinfo_cpu_info(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
+cpuinfo_query(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
   *result = info->info;
 
   return 0;
 }
 
-uint64_t
-cpuinfo_features(const cpuinfo_t *info) {
-  return info->info.features;
-}
+int
+cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result) {
+  *result = info->info.features;
 
-bool
-cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature) {
-  return (info->info.features & (uint64_t) feature) != 0;
+  return 0;
 }
 
 int
-cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
+cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
   result->memory_total = info->info.memory;
 

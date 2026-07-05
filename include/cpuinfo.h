@@ -18,6 +18,7 @@ extern "C" {
 typedef struct cpuinfo_s cpuinfo_t;
 typedef struct cpuinfo_cpu_s cpuinfo_cpu_t;
 typedef struct cpuinfo_usage_s cpuinfo_usage_t;
+typedef struct cpuinfo_features_s cpuinfo_features_t;
 
 /**
  * The instruction set architecture of the CPU.
@@ -32,63 +33,58 @@ typedef enum {
 
 /**
  * The optional instruction set extensions, or "features", that a CPU may
- * support. Reported as a bitmask so that support for several extensions can be
- * queried at once. Intended to replace compile-time feature guards with a
- * runtime check.
+ * support, each reported as a single bit within the struct. Intended to replace
+ * compile-time feature guards with a runtime check.
  *
- * Each value is named for the architecture it belongs to and is only ever set
+ * Each field is named for the architecture it belongs to and is only ever set
  * on that architecture. A capability that exists in spirit on both, such as
- * hardware AES, still has a distinct bit per architecture because the
+ * hardware AES, still has a distinct field per architecture because the
  * underlying instructions differ; portable callers that only care whether the
  * capability is present should test both.
  */
-typedef uint64_t cpuinfo_feature_t;
+struct cpuinfo_features_s {
+  // Arm
+  bool arm_neon : 1;    // Advanced SIMD
+  bool arm_aes : 1;     // AES acceleration
+  bool arm_pmull : 1;   // Polynomial multiply, for GHASH/GCM
+  bool arm_sha1 : 1;    // SHA-1 acceleration
+  bool arm_sha2 : 1;    // SHA-256 acceleration
+  bool arm_sha512 : 1;  // SHA-512 acceleration
+  bool arm_sha3 : 1;    // SHA-3 acceleration
+  bool arm_crc32 : 1;   // CRC-32 checksum acceleration
+  bool arm_atomics : 1; // Large System Extensions (LSE) atomics
+  bool arm_dotprod : 1; // Integer dot product
+  bool arm_fp16 : 1;    // Half-precision floating point
+  bool arm_sve : 1;     // Scalable Vector Extension
+  bool arm_sve2 : 1;    // Scalable Vector Extension 2
 
-/**
- * Arm.
- */
-#define cpuinfo_feature_arm_neon    (UINT64_C(1) << 0)  // Advanced SIMD.
-#define cpuinfo_feature_arm_aes     (UINT64_C(1) << 1)  // AES acceleration.
-#define cpuinfo_feature_arm_pmull   (UINT64_C(1) << 2)  // Polynomial multiply, for GHASH/GCM.
-#define cpuinfo_feature_arm_sha1    (UINT64_C(1) << 3)  // SHA-1 acceleration.
-#define cpuinfo_feature_arm_sha2    (UINT64_C(1) << 4)  // SHA-256 acceleration.
-#define cpuinfo_feature_arm_sha512  (UINT64_C(1) << 5)  // SHA-512 acceleration.
-#define cpuinfo_feature_arm_sha3    (UINT64_C(1) << 6)  // SHA-3 acceleration.
-#define cpuinfo_feature_arm_crc32   (UINT64_C(1) << 7)  // CRC-32 checksum acceleration.
-#define cpuinfo_feature_arm_atomics (UINT64_C(1) << 8)  // Large System Extensions (LSE) atomics.
-#define cpuinfo_feature_arm_dotprod (UINT64_C(1) << 9)  // Integer dot product.
-#define cpuinfo_feature_arm_fp16    (UINT64_C(1) << 10) // Half-precision floating point.
-#define cpuinfo_feature_arm_sve     (UINT64_C(1) << 11) // Scalable Vector Extension.
-#define cpuinfo_feature_arm_sve2    (UINT64_C(1) << 12) // Scalable Vector Extension 2.
-
-/**
- * x86.
- */
-#define cpuinfo_feature_x86_sse2            (UINT64_C(1) << 13)
-#define cpuinfo_feature_x86_sse3            (UINT64_C(1) << 14)
-#define cpuinfo_feature_x86_ssse3           (UINT64_C(1) << 15)
-#define cpuinfo_feature_x86_sse4_1          (UINT64_C(1) << 16)
-#define cpuinfo_feature_x86_sse4_2          (UINT64_C(1) << 17)
-#define cpuinfo_feature_x86_avx             (UINT64_C(1) << 18)
-#define cpuinfo_feature_x86_avx2            (UINT64_C(1) << 19)
-#define cpuinfo_feature_x86_fma             (UINT64_C(1) << 20)
-#define cpuinfo_feature_x86_bmi             (UINT64_C(1) << 21)
-#define cpuinfo_feature_x86_bmi2            (UINT64_C(1) << 22)
-#define cpuinfo_feature_x86_avx512f         (UINT64_C(1) << 23)
-#define cpuinfo_feature_x86_avx512cd        (UINT64_C(1) << 24)
-#define cpuinfo_feature_x86_avx512vl        (UINT64_C(1) << 25)
-#define cpuinfo_feature_x86_avx512bitalg    (UINT64_C(1) << 26)
-#define cpuinfo_feature_x86_avx512vpopcntdq (UINT64_C(1) << 27)
-#define cpuinfo_feature_x86_aes             (UINT64_C(1) << 28) // AES-NI.
-#define cpuinfo_feature_x86_pclmulqdq       (UINT64_C(1) << 29) // Carry-less multiply, for GHASH/GCM.
-#define cpuinfo_feature_x86_sha             (UINT64_C(1) << 30) // SHA-1 and SHA-256 acceleration.
-#define cpuinfo_feature_x86_popcnt          (UINT64_C(1) << 31) // Population count.
-#define cpuinfo_feature_x86_rdrand          (UINT64_C(1) << 32) // On-chip random number generator.
-#define cpuinfo_feature_x86_rdseed          (UINT64_C(1) << 33) // Seed-grade random number generator.
-#define cpuinfo_feature_x86_adx             (UINT64_C(1) << 34) // Multi-precision add-carry, for bignum arithmetic.
-#define cpuinfo_feature_x86_f16c            (UINT64_C(1) << 35) // Half-precision float conversion.
-#define cpuinfo_feature_x86_vaes            (UINT64_C(1) << 36) // Vectorized AES.
-#define cpuinfo_feature_x86_vpclmulqdq      (UINT64_C(1) << 37) // Vectorized carry-less multiply.
+  // x86
+  bool x86_sse2 : 1;            // Streaming SIMD Extensions 2
+  bool x86_sse3 : 1;            // Streaming SIMD Extensions 3
+  bool x86_ssse3 : 1;           // Supplemental Streaming SIMD Extensions 3
+  bool x86_sse4_1 : 1;          // Streaming SIMD Extensions 4.1
+  bool x86_sse4_2 : 1;          // Streaming SIMD Extensions 4.2
+  bool x86_avx : 1;             // Advanced Vector Extensions
+  bool x86_avx2 : 1;            // Advanced Vector Extensions 2
+  bool x86_fma : 1;             // Fused multiply-add
+  bool x86_bmi : 1;             // Bit-manipulation instructions
+  bool x86_bmi2 : 1;            // Bit-manipulation instructions 2
+  bool x86_avx512f : 1;         // AVX-512 foundation
+  bool x86_avx512cd : 1;        // AVX-512 conflict detection
+  bool x86_avx512vl : 1;        // AVX-512 vector length extensions
+  bool x86_avx512bitalg : 1;    // AVX-512 bit algorithms
+  bool x86_avx512vpopcntdq : 1; // AVX-512 vectorized population count
+  bool x86_aes : 1;             // AES-NI
+  bool x86_pclmulqdq : 1;       // Carry-less multiply, for GHASH/GCM
+  bool x86_sha : 1;             // SHA-1 and SHA-256 acceleration
+  bool x86_popcnt : 1;          // Population count
+  bool x86_rdrand : 1;          // On-chip random number generator
+  bool x86_rdseed : 1;          // Seed-grade random number generator
+  bool x86_adx : 1;             // Multi-precision add-carry, for bignum arithmetic
+  bool x86_f16c : 1;            // Half-precision float conversion
+  bool x86_vaes : 1;            // Vectorized AES
+  bool x86_vpclmulqdq : 1;      // Vectorized carry-less multiply
+};
 
 /**
  * The role a logical core plays on a hybrid CPU. `unknown` is reported for a
@@ -140,9 +136,9 @@ struct cpuinfo_cpu_s {
   cpuinfo_arch_t arch;
 
   /**
-   * A bitmask of the `cpuinfo_feature_t` extensions supported by the CPU.
+   * The instruction set extensions supported by the CPU.
    */
-  uint64_t features;
+  cpuinfo_features_t features;
 
   /**
    * The number of physical cores.
@@ -195,7 +191,7 @@ struct cpuinfo_cpu_s {
 struct cpuinfo_usage_s {
   /**
    * The fraction of compute capacity in use, in the range `[0, 1]`, averaged
-   * across all logical cores since the previous call to `cpuinfo_cpu_usage()`,
+   * across all logical cores since the previous call to `cpuinfo_sample()`,
    * or since `cpuinfo_init()` for the first call. A negative value indicates
    * that compute utilization could not be determined on this platform.
    */
@@ -234,19 +230,15 @@ cpuinfo_destroy(cpuinfo_t *info);
  * Returns `0` on success or a negative value on failure.
  */
 int
-cpuinfo_cpu_info(const cpuinfo_t *info, cpuinfo_cpu_t *result);
+cpuinfo_query(const cpuinfo_t *info, cpuinfo_cpu_t *result);
 
 /**
- * Get a bitmask of the `cpuinfo_feature_t` extensions supported by the CPU.
+ * Get the instruction set extensions supported by the CPU.
+ *
+ * Returns `0` on success or a negative value on failure.
  */
-uint64_t
-cpuinfo_features(const cpuinfo_t *info);
-
-/**
- * Check whether the CPU supports the given instruction set extension.
- */
-bool
-cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature);
+int
+cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result);
 
 /**
  * Sample the runtime utilization of the CPU. Compute utilization is reported as
@@ -259,7 +251,7 @@ cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature);
  * Returns `0` on success or a negative value on failure.
  */
 int
-cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result);
+cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result);
 
 /**
  * Get the number of logical cores that can be sampled individually with
@@ -274,9 +266,9 @@ cpuinfo_core_count(const cpuinfo_t *info);
  * Read the runtime utilization of the logical core at the given index, where
  * `index` is in the range `[0, cpuinfo_core_count())`.
  *
- * Unlike `cpuinfo_cpu_usage()`, this does not sample the CPU itself; it reports
- * the per-core figures captured by the most recent `cpuinfo_cpu_usage()` call.
- * Call `cpuinfo_cpu_usage()` first to refresh the snapshot; before the first
+ * Unlike `cpuinfo_sample()`, this does not sample the CPU itself; it reports
+ * the per-core figures captured by the most recent `cpuinfo_sample()` call.
+ * Call `cpuinfo_sample()` first to refresh the snapshot; before the first
  * such call the reported compute utilization is negative. The memory fields
  * carry the system-wide values, which are not partitioned per core.
  *

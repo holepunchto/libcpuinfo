@@ -44,7 +44,7 @@ main() {
 
   cpuinfo_cpu_t cpu;
 
-  err = cpuinfo_cpu_info(info, &cpu);
+  err = cpuinfo_query(info, &cpu);
   assert(err == 0);
 
   printf("cpu: %s (%s), %s\n", cpu.name, cpu.vendor, arch_name(cpu.arch));
@@ -64,44 +64,49 @@ main() {
   // A logical core count of zero would indicate detection failed entirely.
   assert(cpu.logical_cores > 0);
 
+  cpuinfo_features_t features;
+
+  err = cpuinfo_features(info, &features);
+  assert(err == 0);
+
   printf("features:");
   // Arm.
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_neon)) printf(" neon");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_aes)) printf(" aes");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_pmull)) printf(" pmull");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sha1)) printf(" sha1");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sha2)) printf(" sha2");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sha512)) printf(" sha512");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sha3)) printf(" sha3");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_crc32)) printf(" crc32");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_atomics)) printf(" atomics");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_dotprod)) printf(" dotprod");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_fp16)) printf(" fp16");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sve)) printf(" sve");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_arm_sve2)) printf(" sve2");
+  if (features.arm_neon) printf(" neon");
+  if (features.arm_aes) printf(" aes");
+  if (features.arm_pmull) printf(" pmull");
+  if (features.arm_sha1) printf(" sha1");
+  if (features.arm_sha2) printf(" sha2");
+  if (features.arm_sha512) printf(" sha512");
+  if (features.arm_sha3) printf(" sha3");
+  if (features.arm_crc32) printf(" crc32");
+  if (features.arm_atomics) printf(" atomics");
+  if (features.arm_dotprod) printf(" dotprod");
+  if (features.arm_fp16) printf(" fp16");
+  if (features.arm_sve) printf(" sve");
+  if (features.arm_sve2) printf(" sve2");
   // x86.
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_sse2)) printf(" sse2");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_sse4_1)) printf(" sse4.1");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_sse4_2)) printf(" sse4.2");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_avx)) printf(" avx");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_avx2)) printf(" avx2");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_avx512f)) printf(" avx512f");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_bmi)) printf(" bmi");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_aes)) printf(" aes");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_pclmulqdq)) printf(" pclmulqdq");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_sha)) printf(" sha");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_popcnt)) printf(" popcnt");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_rdrand)) printf(" rdrand");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_rdseed)) printf(" rdseed");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_adx)) printf(" adx");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_f16c)) printf(" f16c");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_vaes)) printf(" vaes");
-  if (cpuinfo_has_feature(info, cpuinfo_feature_x86_vpclmulqdq)) printf(" vpclmulqdq");
+  if (features.x86_sse2) printf(" sse2");
+  if (features.x86_sse4_1) printf(" sse4.1");
+  if (features.x86_sse4_2) printf(" sse4.2");
+  if (features.x86_avx) printf(" avx");
+  if (features.x86_avx2) printf(" avx2");
+  if (features.x86_avx512f) printf(" avx512f");
+  if (features.x86_bmi) printf(" bmi");
+  if (features.x86_aes) printf(" aes");
+  if (features.x86_pclmulqdq) printf(" pclmulqdq");
+  if (features.x86_sha) printf(" sha");
+  if (features.x86_popcnt) printf(" popcnt");
+  if (features.x86_rdrand) printf(" rdrand");
+  if (features.x86_rdseed) printf(" rdseed");
+  if (features.x86_adx) printf(" adx");
+  if (features.x86_f16c) printf(" f16c");
+  if (features.x86_vaes) printf(" vaes");
+  if (features.x86_vpclmulqdq) printf(" vpclmulqdq");
   printf("\n");
 
   cpuinfo_usage_t usage;
 
-  err = cpuinfo_cpu_usage(info, &usage);
+  err = cpuinfo_sample(info, &usage);
   assert(err == 0);
 
   printf(

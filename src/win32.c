@@ -88,14 +88,14 @@ struct cpuinfo_s {
   uint64_t *prev_total;
 
   // The per-core compute utilization captured by the most recent
-  // `cpuinfo_cpu_usage()` call, negative until the first such call.
+  // `cpuinfo_sample()` call, negative until the first such call.
   double *core_compute;
 
   // The static per-core detail, indexed by logical processor.
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_cpu_usage()` call.
+  // `cpuinfo_sample()` call.
   uint64_t memory_used;
 };
 
@@ -119,25 +119,30 @@ cpuinfo__arch(void) {
   return cpuinfo_arch_unknown;
 }
 
-static uint64_t
+static cpuinfo_features_t
 cpuinfo__features(void) {
 #if defined(CPUINFO_X86)
   return cpuinfo__cpuid_features();
 #else
+  cpuinfo_features_t features = {0};
+
   // Advanced SIMD is mandatory on the ARM64 systems Windows supports.
-  uint64_t features = cpuinfo_feature_arm_neon;
+  features.arm_neon = true;
 
   // The Armv8 cryptographic extension is reported as a single coarse flag that
   // implies the AES, PMULL, SHA-1, and SHA-256 instructions together.
   if (IsProcessorFeaturePresent(PF_ARM_V8_CRYPTO_INSTRUCTIONS_AVAILABLE)) {
-    features |= cpuinfo_feature_arm_aes | cpuinfo_feature_arm_pmull | cpuinfo_feature_arm_sha1 | cpuinfo_feature_arm_sha2;
+    features.arm_aes = true;
+    features.arm_pmull = true;
+    features.arm_sha1 = true;
+    features.arm_sha2 = true;
   }
 
-  if (IsProcessorFeaturePresent(PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_sha512;
-  if (IsProcessorFeaturePresent(PF_ARM_SHA3_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_sha3;
-  if (IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_crc32;
-  if (IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_atomics;
-  if (IsProcessorFeaturePresent(PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE)) features |= cpuinfo_feature_arm_dotprod;
+  if (IsProcessorFeaturePresent(PF_ARM_SHA512_INSTRUCTIONS_AVAILABLE)) features.arm_sha512 = true;
+  if (IsProcessorFeaturePresent(PF_ARM_SHA3_INSTRUCTIONS_AVAILABLE)) features.arm_sha3 = true;
+  if (IsProcessorFeaturePresent(PF_ARM_V8_CRC32_INSTRUCTIONS_AVAILABLE)) features.arm_crc32 = true;
+  if (IsProcessorFeaturePresent(PF_ARM_V81_ATOMIC_INSTRUCTIONS_AVAILABLE)) features.arm_atomics = true;
+  if (IsProcessorFeaturePresent(PF_ARM_V82_DP_INSTRUCTIONS_AVAILABLE)) features.arm_dotprod = true;
 
   return features;
 #endif
@@ -586,24 +591,21 @@ cpuinfo_destroy(cpuinfo_t *info) {
 }
 
 int
-cpuinfo_cpu_info(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
+cpuinfo_query(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
   *result = info->info;
 
   return 0;
 }
 
-uint64_t
-cpuinfo_features(const cpuinfo_t *info) {
-  return info->info.features;
-}
+int
+cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result) {
+  *result = info->info.features;
 
-bool
-cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature) {
-  return (info->info.features & (uint64_t) feature) != 0;
+  return 0;
 }
 
 int
-cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
+cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
   result->memory_used = 0;
   result->memory_total = info->info.memory;

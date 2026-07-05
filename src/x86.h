@@ -52,9 +52,9 @@ cpuinfo__xgetbv(void) {
 #endif
 }
 
-static inline uint64_t
+static inline cpuinfo_features_t
 cpuinfo__cpuid_features(void) {
-  uint64_t features = 0;
+  cpuinfo_features_t features = {0};
 
   uint32_t registers[4];
 
@@ -62,26 +62,26 @@ cpuinfo__cpuid_features(void) {
 
   uint32_t max_leaf = registers[0];
 
-  if (max_leaf < 1) return 0;
+  if (max_leaf < 1) return features;
 
   cpuinfo__cpuid(1, 0, registers);
 
   uint32_t ecx = registers[2];
   uint32_t edx = registers[3];
 
-  if (edx & (1u << 26)) features |= cpuinfo_feature_x86_sse2;
-  if (ecx & (1u << 0)) features |= cpuinfo_feature_x86_sse3;
-  if (ecx & (1u << 9)) features |= cpuinfo_feature_x86_ssse3;
-  if (ecx & (1u << 19)) features |= cpuinfo_feature_x86_sse4_1;
-  if (ecx & (1u << 20)) features |= cpuinfo_feature_x86_sse4_2;
+  if (edx & (1u << 26)) features.x86_sse2 = true;
+  if (ecx & (1u << 0)) features.x86_sse3 = true;
+  if (ecx & (1u << 9)) features.x86_ssse3 = true;
+  if (ecx & (1u << 19)) features.x86_sse4_1 = true;
+  if (ecx & (1u << 20)) features.x86_sse4_2 = true;
 
   // These operate on general-purpose or legacy SSE register state, which is
   // always enabled, so they do not depend on the OS having enabled the extended
   // AVX state inspected below.
-  if (ecx & (1u << 23)) features |= cpuinfo_feature_x86_popcnt;
-  if (ecx & (1u << 25)) features |= cpuinfo_feature_x86_aes;
-  if (ecx & (1u << 1)) features |= cpuinfo_feature_x86_pclmulqdq;
-  if (ecx & (1u << 30)) features |= cpuinfo_feature_x86_rdrand;
+  if (ecx & (1u << 23)) features.x86_popcnt = true;
+  if (ecx & (1u << 25)) features.x86_aes = true;
+  if (ecx & (1u << 1)) features.x86_pclmulqdq = true;
+  if (ecx & (1u << 30)) features.x86_rdrand = true;
 
   // The AVX register state must also be enabled by the OS before the extensions
   // that use it can be reported, which requires inspecting XCR0 via `xgetbv`.
@@ -93,11 +93,11 @@ cpuinfo__cpuid_features(void) {
   bool avx512_enabled = (xcr0 & 0xe6) == 0xe6; // XMM, YMM, and the AVX-512 opmask and ZMM state
 
   if (avx_enabled) {
-    if (ecx & (1u << 28)) features |= cpuinfo_feature_x86_avx;
-    if (ecx & (1u << 12)) features |= cpuinfo_feature_x86_fma;
+    if (ecx & (1u << 28)) features.x86_avx = true;
+    if (ecx & (1u << 12)) features.x86_fma = true;
 
     // Half-precision conversion is VEX-encoded and so requires the AVX state.
-    if (ecx & (1u << 29)) features |= cpuinfo_feature_x86_f16c;
+    if (ecx & (1u << 29)) features.x86_f16c = true;
   }
 
   if (max_leaf >= 7) {
@@ -108,28 +108,28 @@ cpuinfo__cpuid_features(void) {
 
     // These operate on general-purpose registers or legacy SSE state and so do
     // not depend on the extended AVX register state.
-    if (ebx7 & (1u << 3)) features |= cpuinfo_feature_x86_bmi;
-    if (ebx7 & (1u << 8)) features |= cpuinfo_feature_x86_bmi2;
-    if (ebx7 & (1u << 29)) features |= cpuinfo_feature_x86_sha;
-    if (ebx7 & (1u << 18)) features |= cpuinfo_feature_x86_rdseed;
-    if (ebx7 & (1u << 19)) features |= cpuinfo_feature_x86_adx;
+    if (ebx7 & (1u << 3)) features.x86_bmi = true;
+    if (ebx7 & (1u << 8)) features.x86_bmi2 = true;
+    if (ebx7 & (1u << 29)) features.x86_sha = true;
+    if (ebx7 & (1u << 18)) features.x86_rdseed = true;
+    if (ebx7 & (1u << 19)) features.x86_adx = true;
 
     if (avx_enabled) {
-      if (ebx7 & (1u << 5)) features |= cpuinfo_feature_x86_avx2;
+      if (ebx7 & (1u << 5)) features.x86_avx2 = true;
 
       // The vectorized AES and carry-less multiply instructions are enumerated
       // independently of AVX-512; their VEX-encoded forms need only the AVX
       // state, while the 512-bit EVEX forms additionally require AVX-512.
-      if (ecx7 & (1u << 9)) features |= cpuinfo_feature_x86_vaes;
-      if (ecx7 & (1u << 10)) features |= cpuinfo_feature_x86_vpclmulqdq;
+      if (ecx7 & (1u << 9)) features.x86_vaes = true;
+      if (ecx7 & (1u << 10)) features.x86_vpclmulqdq = true;
     }
 
     if (avx512_enabled) {
-      if (ebx7 & (1u << 16)) features |= cpuinfo_feature_x86_avx512f;
-      if (ebx7 & (1u << 28)) features |= cpuinfo_feature_x86_avx512cd;
-      if (ebx7 & (1u << 31)) features |= cpuinfo_feature_x86_avx512vl;
-      if (ecx7 & (1u << 12)) features |= cpuinfo_feature_x86_avx512bitalg;
-      if (ecx7 & (1u << 14)) features |= cpuinfo_feature_x86_avx512vpopcntdq;
+      if (ebx7 & (1u << 16)) features.x86_avx512f = true;
+      if (ebx7 & (1u << 28)) features.x86_avx512cd = true;
+      if (ebx7 & (1u << 31)) features.x86_avx512vl = true;
+      if (ecx7 & (1u << 12)) features.x86_avx512bitalg = true;
+      if (ecx7 & (1u << 14)) features.x86_avx512vpopcntdq = true;
     }
   }
 

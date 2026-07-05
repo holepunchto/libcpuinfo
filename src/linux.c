@@ -68,14 +68,14 @@ struct cpuinfo_s {
   bool *prev_present;
 
   // The per-core compute utilization captured by the most recent
-  // `cpuinfo_cpu_usage()` call, negative until the first such call.
+  // `cpuinfo_sample()` call, negative until the first such call.
   double *core_compute;
 
   // The static per-core detail, indexed by logical processor.
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_cpu_usage()` call.
+  // `cpuinfo_sample()` call.
   uint64_t memory_used;
 };
 
@@ -165,35 +165,41 @@ cpuinfo__arch(void) {
 #endif
 }
 
-static uint64_t
+static cpuinfo_features_t
 cpuinfo__features(void) {
 #if defined(CPUINFO_X86)
   return cpuinfo__cpuid_features();
 #elif defined(__aarch64__)
+  cpuinfo_features_t features = {0};
+
   // Advanced SIMD is mandatory on AArch64.
-  uint64_t features = cpuinfo_feature_arm_neon;
+  features.arm_neon = true;
 
   unsigned long hwcap = getauxval(AT_HWCAP);
   unsigned long hwcap2 = getauxval(AT_HWCAP2);
 
-  if (hwcap & CPUINFO_HWCAP_AES) features |= cpuinfo_feature_arm_aes;
-  if (hwcap & CPUINFO_HWCAP_PMULL) features |= cpuinfo_feature_arm_pmull;
-  if (hwcap & CPUINFO_HWCAP_SHA1) features |= cpuinfo_feature_arm_sha1;
-  if (hwcap & CPUINFO_HWCAP_SHA2) features |= cpuinfo_feature_arm_sha2;
-  if (hwcap & CPUINFO_HWCAP_SHA512) features |= cpuinfo_feature_arm_sha512;
-  if (hwcap & CPUINFO_HWCAP_SHA3) features |= cpuinfo_feature_arm_sha3;
-  if (hwcap & CPUINFO_HWCAP_CRC32) features |= cpuinfo_feature_arm_crc32;
-  if (hwcap & CPUINFO_HWCAP_ATOMICS) features |= cpuinfo_feature_arm_atomics;
-  if (hwcap & CPUINFO_HWCAP_ASIMDDP) features |= cpuinfo_feature_arm_dotprod;
-  if (hwcap & CPUINFO_HWCAP_ASIMDHP) features |= cpuinfo_feature_arm_fp16;
-  if (hwcap & CPUINFO_HWCAP_SVE) features |= cpuinfo_feature_arm_sve;
-  if (hwcap2 & CPUINFO_HWCAP2_SVE2) features |= cpuinfo_feature_arm_sve2;
+  if (hwcap & CPUINFO_HWCAP_AES) features.arm_aes = true;
+  if (hwcap & CPUINFO_HWCAP_PMULL) features.arm_pmull = true;
+  if (hwcap & CPUINFO_HWCAP_SHA1) features.arm_sha1 = true;
+  if (hwcap & CPUINFO_HWCAP_SHA2) features.arm_sha2 = true;
+  if (hwcap & CPUINFO_HWCAP_SHA512) features.arm_sha512 = true;
+  if (hwcap & CPUINFO_HWCAP_SHA3) features.arm_sha3 = true;
+  if (hwcap & CPUINFO_HWCAP_CRC32) features.arm_crc32 = true;
+  if (hwcap & CPUINFO_HWCAP_ATOMICS) features.arm_atomics = true;
+  if (hwcap & CPUINFO_HWCAP_ASIMDDP) features.arm_dotprod = true;
+  if (hwcap & CPUINFO_HWCAP_ASIMDHP) features.arm_fp16 = true;
+  if (hwcap & CPUINFO_HWCAP_SVE) features.arm_sve = true;
+  if (hwcap2 & CPUINFO_HWCAP2_SVE2) features.arm_sve2 = true;
 
   return features;
 #elif defined(__arm__)
-  return (getauxval(AT_HWCAP) & (1 << 12)) ? cpuinfo_feature_arm_neon : 0; // HWCAP_NEON
+  cpuinfo_features_t features = {0};
+
+  features.arm_neon = (getauxval(AT_HWCAP) & (1 << 12)) != 0; // HWCAP_NEON
+
+  return features;
 #else
-  return 0;
+  return (cpuinfo_features_t) {0};
 #endif
 }
 
@@ -666,24 +672,21 @@ cpuinfo_destroy(cpuinfo_t *info) {
 }
 
 int
-cpuinfo_cpu_info(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
+cpuinfo_query(const cpuinfo_t *info, cpuinfo_cpu_t *result) {
   *result = info->info;
 
   return 0;
 }
 
-uint64_t
-cpuinfo_features(const cpuinfo_t *info) {
-  return info->info.features;
-}
+int
+cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result) {
+  *result = info->info.features;
 
-bool
-cpuinfo_has_feature(const cpuinfo_t *info, cpuinfo_feature_t feature) {
-  return (info->info.features & (uint64_t) feature) != 0;
+  return 0;
 }
 
 int
-cpuinfo_cpu_usage(cpuinfo_t *info, cpuinfo_usage_t *result) {
+cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
   result->memory_used = 0;
   result->memory_total = info->info.memory;
