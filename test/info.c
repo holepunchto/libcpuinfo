@@ -112,6 +112,21 @@ main() {
     (unsigned long long) (usage.memory_total / (1024 * 1024))
   );
 
+  // The context takes a baseline sample at initialization, so the first sample
+  // reports a real reading in [0, 1] rather than the "unavailable" sentinel,
+  // even when almost no time has elapsed since initialization. A successful
+  // sample is never negative; the sentinel is reserved for a platform that
+  // cannot measure utilization at all.
+  assert(usage.compute >= 0.0 && usage.compute <= 1.0);
+
+  // A second sample taken immediately after has a near-zero interval. It must
+  // still read as a valid fraction rather than falling back to the sentinel.
+  cpuinfo_usage_t immediate;
+
+  err = cpuinfo_sample(info, &immediate);
+  assert(err == 0);
+  assert(immediate.compute >= 0.0 && immediate.compute <= 1.0);
+
   size_t cores = cpuinfo_core_count(info);
 
   // The individually addressable cores are a subset of the logical cores: the
@@ -126,6 +141,12 @@ main() {
 
     err = cpuinfo_core_usage(info, i, &core);
     assert(err == 0);
+
+    // A present core reports a fraction in [0, 1]; only a core that was offline
+    // across the interval reads as the negative sentinel, never any other
+    // out-of-range value.
+    assert(core.compute <= 1.0);
+    assert(core.compute >= 0.0 || core.compute == -1.0);
 
     printf(
       "  [%zu] %s %llu MHz, l1d %llu KiB l2 %llu KiB l3 %llu KiB, compute %.1f%%\n",
