@@ -199,7 +199,7 @@ cpuinfo__features(void) {
 
   return features;
 #else
-  return (cpuinfo_features_t) {0};
+  return (cpuinfo_features_t){0};
 #endif
 }
 
@@ -736,15 +736,18 @@ cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
     uint64_t core_busy = busy[i] - info->prev_busy[i];
     uint64_t core_total = total[i] - info->prev_total[i];
 
-    info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : -1.0;
+    // A core present in both samples but with a zero-length interval observed no
+    // activity and reads as `0`; the sentinel is left for the offline case above.
+    info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : 0.0;
 
     busy_delta += core_busy;
     total_delta += core_total;
   }
 
-  if (total_delta > 0) {
-    result->compute = (double) busy_delta / (double) total_delta;
-  }
+  // Sampling succeeded, so utilization is measurable on this platform; an
+  // interval too short to observe any activity reads as `0` rather than the
+  // "unavailable" sentinel.
+  result->compute = total_delta > 0 ? (double) busy_delta / (double) total_delta : 0.0;
 
   memcpy(info->prev_busy, busy, info->capacity * sizeof(uint64_t));
   memcpy(info->prev_total, total, info->capacity * sizeof(uint64_t));

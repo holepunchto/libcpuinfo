@@ -185,9 +185,11 @@ struct cpuinfo_cpu_s {
 struct cpuinfo_usage_s {
   /**
    * The fraction of compute capacity in use, in the range `[0, 1]`, averaged
-   * across all logical cores since the previous call to `cpuinfo_sample()`,
-   * or since `cpuinfo_init()` for the first call. A negative value indicates
-   * that compute utilization could not be determined on this platform.
+   * across all logical cores since the previous call to `cpuinfo_sample()`, or
+   * since `cpuinfo_init()` for the first call. As the context takes a baseline
+   * sample at initialization, the first call reports a real reading; an interval
+   * too short to observe any activity reads as `0`. A negative value is reserved
+   * for a platform on which compute utilization cannot be determined at all.
    */
   double compute;
 
@@ -263,8 +265,9 @@ cpuinfo_core_count(const cpuinfo_t *info);
  * Unlike `cpuinfo_sample()`, this does not sample the CPU itself; it reports
  * the per-core figures captured by the most recent `cpuinfo_sample()` call.
  * Call `cpuinfo_sample()` first to refresh the snapshot; before the first
- * such call the reported compute utilization is negative. The memory fields
- * carry the system-wide values, which are not partitioned per core.
+ * such call, and for a core that was offline across the sampled interval, the
+ * reported compute utilization is negative. The memory fields carry the
+ * system-wide values, which are not partitioned per core.
  *
  * Returns `0` on success or a negative value on failure, such as when `index`
  * is out of range.

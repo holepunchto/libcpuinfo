@@ -454,18 +454,20 @@ cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
     uint64_t core_total = total[i] - info->prev_total[i];
 
     // `core_compute` is only `capacity` entries wide, so any processors beyond
-    // it are still counted in the aggregate but not addressable per core.
+    // it are still counted in the aggregate but not addressable per core. A core
+    // with a zero-length interval observed no activity and reads as `0`.
     if (i < info->capacity) {
-      info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : -1.0;
+      info->core_compute[i] = core_total > 0 ? (double) core_busy / (double) core_total : 0.0;
     }
 
     busy_delta += core_busy;
     total_delta += core_total;
   }
 
-  if (total_delta > 0) {
-    result->compute = (double) busy_delta / (double) total_delta;
-  }
+  // Sampling succeeded, so utilization is measurable on this platform; an
+  // interval too short to observe any activity reads as `0` rather than the
+  // "unavailable" sentinel.
+  result->compute = total_delta > 0 ? (double) busy_delta / (double) total_delta : 0.0;
 
   free(info->prev_busy);
   free(info->prev_total);
