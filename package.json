@@ -1,0 +1,23 @@
+{
+  "private": true,
+  "name": "libcpuinfo",
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "prettier --check ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holepunchto/libcpuinfo.git"
+  },
+  "author": "Holepunch",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/holepunchto/libcpuinfo/issues"
+  },
+  "homepage": "https://github.com/holepunchto/libcpuinfo#readme",
+  "devDependencies": {
+    "cmake-harden": "^1.1.0",
+    "prettier": "^3.8.3",
+    "prettier-config-holepunch": "^2.0.0"
+  }
+}
