@@ -27,7 +27,7 @@ if(APPLE)
     PRIVATE
       src/darwin.c
   )
-elseif(LINUX)
+elseif(LINUX OR ANDROID)
   target_sources(
     cpuinfo
     PRIVATE
