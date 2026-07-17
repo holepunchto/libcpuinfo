@@ -46,8 +46,8 @@ struct cpuinfo_s {
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_sample()` call.
-  uint64_t memory_used;
+  // `cpuinfo_sample()` call, or `-1` if it could not be determined.
+  int64_t memory_used;
 };
 
 static bool
@@ -212,11 +212,13 @@ cpuinfo__sample(uint64_t **busy, uint64_t **total, natural_t *cores) {
 }
 
 static void
-cpuinfo__memory(uint64_t total, uint64_t *used) {
+cpuinfo__memory(int64_t total, int64_t *used) {
   vm_size_t page_size = 0;
 
-  if (host_page_size(mach_host_self(), &page_size) != KERN_SUCCESS || page_size == 0) {
-    *used = 0;
+  // Without a known total there is no baseline to subtract available memory
+  // from, so usage cannot be derived either.
+  if (total < 0 || host_page_size(mach_host_self(), &page_size) != KERN_SUCCESS || page_size == 0) {
+    *used = -1;
 
     return;
   }
@@ -225,7 +227,7 @@ cpuinfo__memory(uint64_t total, uint64_t *used) {
   mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
 
   if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &vm, &count) != KERN_SUCCESS) {
-    *used = 0;
+    *used = -1;
 
     return;
   }
@@ -240,7 +242,7 @@ cpuinfo__memory(uint64_t total, uint64_t *used) {
 
   uint64_t available_bytes = available * (uint64_t) page_size;
 
-  *used = available_bytes < total ? total - available_bytes : 0;
+  *used = available_bytes < (uint64_t) total ? total - (int64_t) available_bytes : 0;
 }
 
 // Read a per-perflevel cache size sysctl, such as "hw.perflevel0.l2cachesize".
@@ -342,7 +344,7 @@ cpuinfo_init(cpuinfo_t **result) {
   cpu->physical_cores = cpuinfo__sysctl_uint("hw.physicalcpu", &value) ? (uint32_t) value : 0;
   cpu->logical_cores = cpuinfo__sysctl_uint("hw.logicalcpu", &value) ? (uint32_t) value : 0;
   cpu->frequency = cpuinfo__sysctl_uint("hw.cpufrequency", &value) ? value : 0;
-  cpu->memory = cpuinfo__sysctl_uint("hw.memsize", &value) ? value : 0;
+  cpu->memory = cpuinfo__sysctl_uint("hw.memsize", &value) ? (int64_t) value : -1;
 
   // On a hybrid CPU the kernel exposes one performance level per core type,
   // ordered fastest first. Level 0 is the performance cluster and level 1 the

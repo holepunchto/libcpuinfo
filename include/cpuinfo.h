@@ -173,9 +173,9 @@ struct cpuinfo_cpu_s {
   uint32_t cache_line;
 
   /**
-   * The total amount of installed physical memory, in bytes.
+   * The total amount of installed physical memory, in bytes. `-1` if unknown.
    */
-  uint64_t memory;
+  int64_t memory;
 };
 
 /**
@@ -194,14 +194,14 @@ struct cpuinfo_usage_s {
   double compute;
 
   /**
-   * The amount of physical memory currently in use, in bytes.
+   * The amount of physical memory currently in use, in bytes. `-1` if unknown.
    */
-  uint64_t memory_used;
+  int64_t memory_used;
 
   /**
-   * The total amount of installed physical memory, in bytes.
+   * The total amount of installed physical memory, in bytes. `-1` if unknown.
    */
-  uint64_t memory_total;
+  int64_t memory_total;
 };
 
 /**
