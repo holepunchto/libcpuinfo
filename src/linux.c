@@ -75,8 +75,8 @@ struct cpuinfo_s {
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_sample()` call.
-  uint64_t memory_used;
+  // `cpuinfo_sample()` call, or `-1` if it could not be determined.
+  int64_t memory_used;
 };
 
 static bool
@@ -524,11 +524,15 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
 
   char meminfo[8192];
 
+  // `cpuinfo__meminfo_bytes()` returns `0` when the field is absent, which for
+  // total memory means it could not be determined.
+  uint64_t memory = 0;
+
   if (cpuinfo__read_file("/proc/meminfo", meminfo, sizeof(meminfo))) {
-    cpu->memory = cpuinfo__meminfo_bytes(meminfo, "MemTotal");
-  } else {
-    cpu->memory = 0;
+    memory = cpuinfo__meminfo_bytes(meminfo, "MemTotal");
   }
+
+  cpu->memory = memory > 0 ? (int64_t) memory : -1;
 }
 
 // Sample the cumulative busy and total CPU ticks per core from `/proc/stat`,
@@ -582,11 +586,13 @@ cpuinfo__sample(uint64_t *busy, uint64_t *total, bool *present, unsigned capacit
 }
 
 static void
-cpuinfo__memory(uint64_t total, uint64_t *used) {
+cpuinfo__memory(int64_t total, int64_t *used) {
   char meminfo[8192];
 
-  if (!cpuinfo__read_file("/proc/meminfo", meminfo, sizeof(meminfo))) {
-    *used = 0;
+  // Without a known total there is no baseline to subtract available memory
+  // from, so usage cannot be derived either.
+  if (total < 0 || !cpuinfo__read_file("/proc/meminfo", meminfo, sizeof(meminfo))) {
+    *used = -1;
 
     return;
   }
@@ -601,7 +607,7 @@ cpuinfo__memory(uint64_t total, uint64_t *used) {
                 cpuinfo__meminfo_bytes(meminfo, "Cached");
   }
 
-  *used = available < total ? total - available : 0;
+  *used = available < (uint64_t) total ? total - (int64_t) available : 0;
 }
 
 int
@@ -690,7 +696,7 @@ cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result) {
 int
 cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
-  result->memory_used = 0;
+  result->memory_used = -1;
   result->memory_total = info->info.memory;
 
   cpuinfo__memory(info->info.memory, &result->memory_used);

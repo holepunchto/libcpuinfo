@@ -55,7 +55,9 @@ main() {
   }
 
   printf("cache: line %u B\n", cpu.cache_line);
-  printf("memory: %llu MiB\n", (unsigned long long) (cpu.memory / (1024 * 1024)));
+
+  if (cpu.memory < 0) printf("memory: unknown\n");
+  else printf("memory: %lld MiB\n", (long long) (cpu.memory / (1024 * 1024)));
 
   // A logical core count of zero would indicate detection failed entirely.
   assert(cpu.logical_cores > 0);
@@ -105,11 +107,13 @@ main() {
   err = cpuinfo_sample(info, &usage);
   assert(err == 0);
 
+  // A negative memory figure is the "unknown" sentinel rather than a byte count,
+  // so it is passed through as `-1` MiB rather than scaled.
   printf(
-    "usage: compute %.1f%%, memory %llu / %llu MiB\n",
+    "usage: compute %.1f%%, memory %lld / %lld MiB\n",
     usage.compute < 0 ? 0.0 : usage.compute * 100.0,
-    (unsigned long long) (usage.memory_used / (1024 * 1024)),
-    (unsigned long long) (usage.memory_total / (1024 * 1024))
+    usage.memory_used < 0 ? -1 : (long long) (usage.memory_used / (1024 * 1024)),
+    usage.memory_total < 0 ? -1 : (long long) (usage.memory_total / (1024 * 1024))
   );
 
   // The context takes a baseline sample at initialization, so the first sample

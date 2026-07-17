@@ -95,8 +95,8 @@ struct cpuinfo_s {
   cpuinfo_core_t *core;
 
   // The system-wide memory usage captured by the most recent
-  // `cpuinfo_sample()` call.
-  uint64_t memory_used;
+  // `cpuinfo_sample()` call, or `-1` if it could not be determined.
+  int64_t memory_used;
 };
 
 static cpuinfo_arch_t
@@ -299,9 +299,9 @@ cpuinfo__fill_static(cpuinfo_cpu_t *cpu) {
   memory.dwLength = sizeof(memory);
 
   if (GlobalMemoryStatusEx(&memory)) {
-    cpu->memory = memory.ullTotalPhys;
+    cpu->memory = (int64_t) memory.ullTotalPhys;
   } else {
-    cpu->memory = 0;
+    cpu->memory = -1;
   }
 }
 
@@ -353,14 +353,14 @@ cpuinfo__sample(cpuinfo_t *info, uint64_t *busy, uint64_t *total, unsigned *core
 }
 
 static void
-cpuinfo__memory(uint64_t *used) {
+cpuinfo__memory(int64_t *used) {
   MEMORYSTATUSEX memory;
   memory.dwLength = sizeof(memory);
 
   if (GlobalMemoryStatusEx(&memory)) {
-    *used = memory.ullTotalPhys - memory.ullAvailPhys;
+    *used = (int64_t) (memory.ullTotalPhys - memory.ullAvailPhys);
   } else {
-    *used = 0;
+    *used = -1;
   }
 }
 
@@ -605,7 +605,7 @@ cpuinfo_features(const cpuinfo_t *info, cpuinfo_features_t *result) {
 int
 cpuinfo_sample(cpuinfo_t *info, cpuinfo_usage_t *result) {
   result->compute = -1.0;
-  result->memory_used = 0;
+  result->memory_used = -1;
   result->memory_total = info->info.memory;
 
   cpuinfo__memory(&result->memory_used);
